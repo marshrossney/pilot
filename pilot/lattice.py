@@ -49,14 +49,16 @@ class Lattice2D:
         """Returns nearest neighbour indices: up/down/left/right."""
         return self.get_shift((1, -1, 1, -1), (0, 0, 1, 1))
 
-    def vectors(self):
-        """Iterator for all lattice vectors.
-
-        There is no reason why I need the list comp for 2D lattice.
-        """
-        return product(*[range(L) for L in self.dimensions])
-
-    def two_point_iterator(self):
+    def two_point_iterator(self, pos_only=False, diag_only=False):
         """Iterator for shifts."""
-        for vector in self.vectors():
+        if pos_only:
+            indices = [range(L // 2 + 1) for L in self.dimensions]
+        else:
+            indices = [range(L) for L in self.dimensions]
+        if diag_only:
+            vectors = zip(*indices)  # truncates if dimensions not equal size
+        else:
+            vectors = product(*indices)
+
+        for vector in vectors:
             yield vector, self.get_shift((tuple(vector),), ((0, 1),)).flatten()

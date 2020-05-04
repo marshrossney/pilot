@@ -6,7 +6,7 @@ from functools import wraps
 BOOTSTRAP_SAMPLE_SIZE = 100
 
 
-class NotRequired(Exception):
+class NotDefinedForField(Exception):
     pass
 
 
@@ -39,7 +39,6 @@ def spher_to_eucl(coords):
     output[:, :-1] = np.cos(coords)
     output[:, 1:] *= np.cumprod(np.sin(coords), axis=1)
     return output
-
 
 
 class bootstrapped:

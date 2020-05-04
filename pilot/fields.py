@@ -5,6 +5,7 @@ from math import pi, exp
 import scipy.stats
 from pilot.distributions import SphericalUniformDist
 from pilot.utils import (
+    NotDefinedForField,
     spher_to_eucl,
     bootstrapped,
     unit_norm,
@@ -13,10 +14,6 @@ from pilot.utils import (
 
 
 class HamiltonianMismatchError(Exception):
-    pass
-
-
-class NotDefinedForField(Exception):
     pass
 
 
@@ -222,11 +219,15 @@ class ClassicalSpinField(Field):
         """Calculates the volume-averaged two point connected correlation function for an
         ensemble of field configurations."""
         _, _, *extra_dims = spins.shape
-        va_correlator = np.empty((*self.lattice.dimensions, *extra_dims))
+        # Take positive diagonal shifts only to save time
+        n_pos_diag = min(self.lattice.dimensions) // 2 + 1
+        va_correlator = np.empty((n_pos_diag, *extra_dims))
 
         # Disconnected part
-        for vector, shift in self.lattice.two_point_iterator():
-            va_correlator[vector] = np.sum(
+        for vector, shift in self.lattice.two_point_iterator(
+            pos_only=True, diag_only=True
+        ):
+            va_correlator[vector[0]] = np.sum(
                 spins[shift] * spins, axis=1,  # sum over vector components
             ).mean(
                 axis=0,  # average over volume

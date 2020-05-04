@@ -8,7 +8,7 @@ from scipy.signal import correlate
 from math import ceil
 from itertools import product
 
-from pilot.utils import cached_property
+from pilot.utils import cached_property, NotDefinedForField
 
 
 class observable:
@@ -71,7 +71,9 @@ class Observables:
         "zero_momentum_correlator",
         "effective_pole_mass",
         "two_point_correlator",
+        "two_point_correlator_series",
         "two_point_correlator_autocorrelation",
+        "topological_charge_series",
         "topological_charge_autocorrelation",
     ]
 
@@ -89,10 +91,18 @@ class Observables:
                 header = table.replace("_", " ")
                 line = "".join(["-" for char in table])
                 out += f"{header}\n{line}\n{df}\n\n"
-            except NotValid:  # TODO Should make this more specific
+            except NotDefinedForField:
                 pass
 
         return out
+
+    @cached_property
+    def _two_point_correlator_series(self):
+        return self.ensemble.vol_avg_two_point_correlator
+
+    @cached_property
+    def _topological_charge_series(self):
+        return self.ensemble.topological_charge
 
     @cached_property
     def _hamiltonian(self):
@@ -121,10 +131,7 @@ class Observables:
 
     @cached_property
     def _auto_two_point_correlator(self):
-        x1_max, x2_max = np.array(self.ensemble.lattice.dimensions) // 2 + 1
-        return autocorrelation(
-            self.ensemble.vol_avg_two_point_correlator[:x1_max, :x2_max, :]
-        )
+        return autocorrelation(self.ensemble.vol_avg_two_point_correlator)
 
     @cached_property
     def _auto_topological_charge(self):
@@ -285,28 +292,50 @@ class Observables:
         return fig
 
     @property
+    def plot_two_point_correlator_series(self):
+        fig, ax = plt.subplots(1)
+        ax.set_title("Two point correlator series$")
+        ax.set_xlabel("$t$")
+        ax.set_ylabel("$G(x; t)$")
+        for i in range(self._two_point_correlator_series.shape[0]):
+            ax.plot(
+                self._two_point_correlator_series[i, :],
+                linewidth=1,
+                label=f"$x =$ ({i}, {i})",
+            )
+        ax.legend()
+        fig.tight_layout()
+        return fig
+
+    @property
+    def plot_topological_charge_series(self):
+        fig, ax = plt.subplots(1)
+        ax.set_title("Topological charge series$")
+        ax.set_xlabel("$t$")
+        ax.set_ylabel("$Q(t)$")
+        ax.plot(self._topological_charge_series, linewidth=1)
+        fig.tight_layout()
+        return fig
+
+    @property
     def plot_two_point_correlator_autocorrelation(self):
-        # NOTE: Assume LxL 2D lattice. Take diagonal to reduce plot size
-        # NOTE: np.diagonal swaps remaining dimensions
-        auto_to_plot = np.diagonal(self._auto_two_point_correlator, axis1=0, axis2=1)
-        integrated_to_plot = np.diagonal(
-            self._iauto_two_point_correlator, axis1=0, axis2=1
-        )
-        lines_to_plot = np.diagonal(self._optimal_window_two_point_correlator)
-        cut = int(2 * np.max(lines_to_plot))
+        auto_to_plot = self._auto_two_point_correlator
+        integrated_to_plot = self._iauto_two_point_correlator
+        lines_to_plot = self._optimal_window_two_point_correlator
+        cut = max(10, 2 * np.max(lines_to_plot))
 
         fig, ax1 = plt.subplots(1)
         ax2 = ax1.twinx()
-        ax1.set_title("$G(x)$ autocorrelation")
+        ax1.set_title("$G(x; t)$ autocorrelation")
         ax1.set_xlabel("$\delta t$")
         ax1.set_ylabel("$\Gamma_G(\delta t)$")
         ax2.set_ylabel("$\sum \Gamma_G(\delta t)$")
 
-        for i in range(auto_to_plot.shape[1]):
+        for i in range(auto_to_plot.shape[0]):
             color = next(ax1._get_lines.prop_cycler)["color"]
-            ax1.plot(auto_to_plot[:cut, i], linestyle=":", color=color)
+            ax1.plot(auto_to_plot[i, :cut], linestyle=":", color=color)
             ax2.plot(
-                integrated_to_plot[:cut, i],
+                integrated_to_plot[i, :cut],
                 linestyle="-",
                 color=color,
                 label=f"$x =$ ({i},{i})",
@@ -326,6 +355,7 @@ class Observables:
         auto_to_plot = self._auto_topological_charge
         integrated_to_plot = self._iauto_topological_charge
         line = self._optimal_window_topological_charge
+        cut = max(10, 2 * line)
 
         fig, ax1 = plt.subplots(1)
         ax2 = ax1.twinx()
@@ -334,10 +364,14 @@ class Observables:
         ax1.set_ylabel("$\Gamma_Q(\delta t)$")
         ax2.set_ylabel("$\sum \Gamma_Q(\delta t)$")
 
-        ax1.plot(auto_to_plot[: line * 2], linestyle=":")
-        ax2.plot(integrated_to_plot[: line * 2], linestyle="-")
+        ax1.plot(auto_to_plot[:cut], linestyle=":")
+        ax2.plot(integrated_to_plot[:cut], linestyle="-")
         ax1.axvline(line, linestyle="--")
-        ax2.text(1, 0.6, fr"$\tau_Q = ${integrated_to_plot[line]}")
+        ax2.annotate(
+            fr"$\tau_Q = ${integrated_to_plot[line]:.3g}",
+            xy=(0.05, 0.05),
+            xycoords="axes fraction",
+        )
 
         ax1.set_xlim(left=0)
         ax1.set_ylim(top=1)

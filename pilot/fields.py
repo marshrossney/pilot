@@ -1,7 +1,6 @@
 import numpy as np
 from random import random, randint
 from math import pi, exp
-import pandas as pd
 
 import scipy.stats
 from pilot.distributions import SphericalUniformDist
@@ -9,8 +8,7 @@ from pilot.utils import (
     spher_to_eucl,
     bootstrapped,
     unit_norm,
-    method_property,
-    requires_true,
+    requires,
 )
 
 
@@ -18,26 +16,24 @@ class HamiltonianMismatchError(Exception):
     pass
 
 
-class _valid_field:
-    def __init__(self, setter):
-        self.setter = setter
+class NotDefinedForField(Exception):
+    pass
 
-    def __call__(self, instance, array_in):
-        # Check that 0th dimension of input data matches the number of lattice sites
-        assert (
-            array_in.shape[0] == instance.lattice.volume
-        ), f"Size of coordinates array at dimension 0: {array_in.shape[0]} does not match volume of lattice: {instance.lattice.volume}"
-        # Check that the input data has at least the minimum number of dimensions
-        n_dims = len(array_in.shape)
-        assert (
-            n_dims >= instance.minimum_dimensions
-        ), f"Invalid number of dimensions in coordinate array. Expected {instance.minimum_dimensions} or more, but found {n_dims}."
-        # If missing, add ensemble dimension for convenience
-        if n_dims == instance.minimum_dimensions:
-            array_in = np.expand_dims(array_in, axis=-1)
 
-        self.setter(instance, array_in)
-        return
+class NotEnsembleError(Exception):
+    pass
+
+
+class requires_topology(requires):
+    attributes = ("has_topology",)
+    exception = NotDefinedForField
+    message = "Topology not defined for field"
+
+
+class requires_ensemble(requires):
+    attributes = ("is_ensemble",)
+    exception = NotEnsembleError
+    message = "is only defined for ensembles}"
 
 
 class Field:
@@ -56,7 +52,6 @@ class Field:
         self.__dict__.update(theory_kwargs)
 
         self.shift = self.lattice.get_shift()
-        # TODO cached property called only when needed?
         self.neighbours = self.lattice.get_neighbours()
 
         self.has_topology = False
@@ -71,6 +66,22 @@ class Field:
             out += f"\n{label}: {value}"
         return out
 
+    def _valid_field(self, array_in):
+        # Check that 0th dimension of input data matches the number of lattice sites
+        assert (
+            array_in.shape[0] == self.lattice.volume
+        ), f"Size of coordinates array at dimension 0: {array_in.shape[0]} does not match volume of lattice: {instance.lattice.volume}"
+        # Check that the input data has at least the minimum number of dimensions
+        n_dims = len(array_in.shape)
+        assert (
+            n_dims >= self.minimum_dimensions
+        ), f"Invalid number of dimensions in coordinate array. Expected {instance.minimum_dimensions} or more, but found {n_dims}."
+        # If missing, add ensemble dimension for convenience
+        if n_dims == self.minimum_dimensions:
+            array_in = np.expand_dims(array_in, axis=-1)
+
+        return array_in
+
     @property
     def coords(self):
         """The set of coordinates which define the configuration or ensemble.
@@ -78,10 +89,9 @@ class Field:
         return self._coords
 
     @coords.setter
-    @_valid_field
     def coords(self, new):
-        """Setter for coords which performs some basic checks (see valid_field)."""
-        self._coords = new
+        """Setter for coords which performs some basic checks (see _valid_field)."""
+        self._coords = self._valid_field(new)
 
     @property
     def is_ensemble(self):
@@ -90,11 +100,6 @@ class Field:
         if len(self.coords.squeeze().shape) >= self.minimum_dimensions + 1:
             return True
         return False
-
-    @property
-    def is_single(self):
-        """Bool indicating whether the coordinates array is just a single field."""
-        return not self.is_ensemble
 
     @property
     def has_topology(self):
@@ -318,45 +323,44 @@ class ClassicalSpinField(Field):
     def spins(self, new):
         """Updates the spin configuration or ensemble (by updating coords), also checking
         that the spin vectors have unit norm."""
-        # TODO: check and adjust dimensions here
-        self.coords = new
+        self.coords = new  # calls coords.__set__
 
-    @method_property
+    @property
     def hamiltonian(self):
         """The Hamiltonian for each configuration in the ensemble.
         numpy.ndarray, dimensions (*, ensemble_size)"""
         return self._hamiltonian(self.spins)
 
-    @method_property
+    @property
     def magnetisation_sq(self):
         """The squared magnetisation for each configuration in the ensemble.
         numpy.ndarray, dimensions (*, ensemble_size)"""
         return self._magnetisation_sq(self.spins)
 
-    @method_property
+    @property
     def vol_avg_two_point_correlator(self):
         """The volume-averaged two point connected correlation function.
         numpy.ndarray, dimensions (*lattice_dimensions, *, ensemble_size)"""
         return self._vol_avg_two_point_correlator(self.spins)
 
-    @method_property
-    @requires_true("has_topology")
+    @property
+    @requires_topology
     def topological_charge(self):
         """Topological charge of a configuration or ensemble of Heisenberg spins,
         according to the geometrical definition given in REF
         numpy.ndarray, dimensions (*, ensemble_size)"""
         return self._topological_charge(self.spins)
 
-    @method_property
-    @requires_true("is_ensemble")
+    @property
+    @requires_ensemble
     def two_point_correlator(self):
         """Two point connected correlation function, where the ensemble average
         is taken before the volume average.
         numpy.ndarray, dimensions (*lattice_dimensions, *, 1)"""
         return self._two_point_correlator(self.spins)
 
-    @method_property
-    @requires_true("is_ensemble")
+    @property
+    @requires_ensemble
     def boot_hamiltonian(self):
         """The Hamiltonian for a bootstrap sample of ensembles.
         numpy.ndarray, dimensions(*, bootstrap_sample_size, ensemble_size)"""
@@ -364,29 +368,29 @@ class ClassicalSpinField(Field):
         # __call__ method of @bootstrapped!!!
         return self._boot_hamiltonian(self, self.spins)
 
-    @method_property
-    @requires_true("is_ensemble")
+    @property
+    @requires_ensemble
     def boot_magnetisation_sq(self):
         """The squared magnetisation for a bootstrap sample of ensembles.
         numpy.ndarray, dimensions(*, bootstrap_sample_size, ensemble_size)"""
         return self._boot_magnetisation_sq(self, self.spins)
 
-    @method_property
-    @requires_true("is_ensemble")
+    @property
+    @requires_ensemble
     def boot_two_point_correlator(self):
         """Two point connected correlation function for a bootstrap sample of
         ensembles, where the ensemble average is taken before the volume average.
         numpy.ndarray, dimensions (*lattice_dimensions, *, bootstrap_sample_size, 1)"""
         return self._boot_two_point_correlator(self, self.spins)
 
-    @method_property
-    @requires_true("is_ensemble", "has_topology")
+    @property
+    @requires_ensemble
+    @requires_topology
     def boot_topological_charge(self):
         """Topological charge of a bootstrap sample of ensembles of Heisenberg spins.
         numpy.ndarray, dimensions (*, bootstrap_sample_size, ensemble_size)"""
         return self._boot_topological_charge(self, self.spins)
 
-    @requires_true("is_single")
     def metropolis_update(self, sweeps=1, debug=False):
         """Perform a sequence of local updates according to the Metropolis algorithm.
         

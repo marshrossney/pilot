@@ -4,10 +4,11 @@ observables.py
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from scipy.signal import correlate
 from math import ceil
+from itertools import product
 
-
-from pilot.utils import cached_property, requires_true
+from pilot.utils import cached_property
 
 
 class observable:
@@ -26,36 +27,34 @@ class observable:
         return value, error
 
 
-class table:
-    def __init__(self, func):
-        self._func = func
-        self._name = func.__name__.replace("_", " ")
-        self.__doc__ = func.__doc__
+def autocorrelation(chain):
+    chain -= chain.mean(axis=-1, keepdims=True)  # expect ensemble dimension at -1
+    auto = correlate(chain, chain, mode="same")
+    t0 = auto.shape[-1] // 2  # this is true for mode="same"
+    return auto[..., t0:] / auto[..., [t0]]  # normalise and take +ve shifts
 
-    def __get__(self, instance, owner):
-        keys = self._func(instance)
 
-        # [ [value1, error1], [value2, error2], ... ]
-        data = [getattr(instance, key) for key in keys]
+def optimal_window(integrated, mult=2.0, eps=1e-6):
 
-        nkeys = len(keys)
-        dshape = len(data[0][0].shape)
+    # Exponential autocorrelation
+    with np.errstate(invalid="ignore", divide="ignore"):
+        exponential = np.clip(
+            np.nan_to_num(mult / np.log((2 * integrated + 1) / (2 * integrated - 1))),
+            a_min=eps,
+            a_max=None,
+        )
 
-        if nkeys > 1:  # assume all scalar values
-            return pd.DataFrame(
-                data,
-                index=[key.replace("_", " ") for key in keys],
-                columns=["value", "error"],
-            )
+    # Infer ensemble size, assuming correlation mode was 'same'!!!
+    n_t = integrated.shape[-1]
+    ensemble_size = n_t * 2
 
-        if dshape == 1:
-            return pd.DataFrame(data[0], index=["value", "error"]).T
+    # Window func, we want the minimum
+    t_sep = np.arange(1, n_t + 1)
+    window_func = np.exp(-t_sep / exponential) - exponential / np.sqrt(
+        t_sep * ensemble_size
+    )
 
-        elif dshape == 2:
-            # [ value1, error1, value2, error2, ... ]
-            data = [item for nested in data for item in nested]
-            keys = ["value", "error"]
-            return pd.concat([pd.DataFrame(array) for array in data], keys=keys)
+    return np.argmax((window_func[..., 1:] < 0), axis=-1)
 
 
 class Observables:
@@ -66,11 +65,14 @@ class Observables:
         "effective_pole_mass",
         "two_point_correlator",
         "topological_observables",
+        "two_point_correlator_integrated_autocorrelation",
     ]
     figures = [
         "zero_momentum_correlator",
         "effective_pole_mass",
         "two_point_correlator",
+        "two_point_correlator_autocorrelation",
+        "topological_charge_autocorrelation",
     ]
 
     def __init__(self, ensemble, bootstrap=True):
@@ -78,9 +80,6 @@ class Observables:
         self.bootstrap = bootstrap
 
         self.volume = ensemble.lattice.volume
-
-        self.has_topology = ensemble.has_topology
-        # TODO similar with spin / thermal
 
     def __str__(self):
         out = "\n"
@@ -90,7 +89,7 @@ class Observables:
                 header = table.replace("_", " ")
                 line = "".join(["-" for char in table])
                 out += f"{header}\n{line}\n{df}\n\n"
-            except AttributeError:  # TODO Should make this more specific
+            except NotValid:  # TODO Should make this more specific
                 pass
 
         return out
@@ -119,6 +118,33 @@ class Observables:
     @cached_property
     def _topological_charge(self):
         return self.ensemble.boot_topological_charge
+
+    @cached_property
+    def _auto_two_point_correlator(self):
+        x1_max, x2_max = np.array(self.ensemble.lattice.dimensions) // 2 + 1
+        return autocorrelation(
+            self.ensemble.vol_avg_two_point_correlator[:x1_max, :x2_max, :]
+        )
+
+    @cached_property
+    def _auto_topological_charge(self):
+        return autocorrelation(self.ensemble.topological_charge)
+
+    @cached_property
+    def _iauto_two_point_correlator(self):
+        return np.cumsum(self._auto_two_point_correlator, axis=-1) - 0.5
+
+    @cached_property
+    def _iauto_topological_charge(self):
+        return np.cumsum(self._auto_topological_charge) - 0.5
+
+    @cached_property
+    def _optimal_window_two_point_correlator(self):
+        return optimal_window(self._iauto_two_point_correlator)
+
+    @cached_property
+    def _optimal_window_topological_charge(self):
+        return optimal_window(self._iauto_topological_charge)
 
     @observable
     def energy_density(self):
@@ -174,53 +200,78 @@ class Observables:
     def topological_susceptibility(self):
         return self._topological_charge.var(axis=-1) / self.volume
 
-    @table
+    @property
     def table_spin_observables(self):
-        return [
+        keys = [
             "energy_density",
             "magnetisation_sq",
             "magnetic_susceptibility",
             "heat_capacity",
         ]
+        return pd.DataFrame(
+            [getattr(self, key) for key in keys],
+            index=[key.replace("_", " ") for key in keys],
+            columns=["value", "error"],
+        )
 
-    @table
+    @property
     def table_ising_observables(self):
-        return ["ising_energy", "susceptibility"]
+        keys = ["ising_energy", "susceptibility"]
+        return pd.DataFrame(
+            [getattr(self, key) for key in keys],
+            index=[key.replace("_", " ") for key in keys],
+            columns=["value", "error"],
+        )
 
-    @table
+    @property
     def table_zero_momentum_correlator(self):
-        return [
-            "zero_momentum_correlator",
-        ]
+        return pd.DataFrame(self.zero_momentum_correlator, index=["value", "error"]).T
 
-    @table
+    @property
     def table_effective_pole_mass(self):
-        return [
-            "effective_pole_mass",
-        ]
+        return pd.DataFrame(self.effective_pole_mass, index=["value", "error"]).T
 
-    @table
+    @property
     def table_two_point_correlator(self):
-        return [
-            "two_point_correlator",
-        ]
+        value, error = self.two_point_correlator
+        return pd.concat(
+            [pd.DataFrame(value), pd.DataFrame(error)], keys=["value", "error"],
+        )
 
-    @table
+    @property
     def table_topological_observables(self):
-        return ["topological_charge", "topological_susceptibility"]
+        keys = ["topological_charge", "topological_susceptibility"]
+        return pd.DataFrame(
+            [getattr(self, key) for key in keys],
+            index=[key.replace("_", " ") for key in keys],
+            columns=["value", "error"],
+        )
 
+    @property
+    def table_two_point_correlator_integrated_autocorrelation(self):
+        shape_out = self._iauto_two_point_correlator.shape[:-1]
+        w_opt = self._optimal_window_two_point_correlator
+        values_out = np.empty(shape_out)
+        for tup in product(*[range(size) for size in shape_out]):
+            index = tup + (w_opt[tup],)
+            values_out[tup] = self._iauto_two_point_correlator[index]
+        return pd.DataFrame(values_out)
+
+    @property
     def plot_zero_momentum_correlator(self):
         df = self.table_zero_momentum_correlator
         return df["value"].plot(
             x=df.index.values, yerr=df["error"], title="zero momentum correlator"
         )
 
+    @property
     def plot_effective_pole_mass(self):
         df = self.table_effective_pole_mass
         return df["value"].plot(
             x=df.index.values, yerr=df["error"], title="effective pole mass"
         )
 
+    @property
     def plot_two_point_correlator(self):
         # NOTE: Annoyingly seems to sort things in alphabetical order
         iterator = self.table_two_point_correlator.groupby(level=0)
@@ -230,5 +281,67 @@ class Observables:
             plt.colorbar(img, ax=ax, fraction=0.046, pad=0.04)
             ax.xaxis.tick_top()
             ax.set_title(key)
+        fig.tight_layout()
+        return fig
+
+    @property
+    def plot_two_point_correlator_autocorrelation(self):
+        # NOTE: Assume LxL 2D lattice. Take diagonal to reduce plot size
+        # NOTE: np.diagonal swaps remaining dimensions
+        auto_to_plot = np.diagonal(self._auto_two_point_correlator, axis1=0, axis2=1)
+        integrated_to_plot = np.diagonal(
+            self._iauto_two_point_correlator, axis1=0, axis2=1
+        )
+        lines_to_plot = np.diagonal(self._optimal_window_two_point_correlator)
+        cut = int(2 * np.max(lines_to_plot))
+
+        fig, ax1 = plt.subplots(1)
+        ax2 = ax1.twinx()
+        ax1.set_title("$G(x)$ autocorrelation")
+        ax1.set_xlabel("$\delta t$")
+        ax1.set_ylabel("$\Gamma_G(\delta t)$")
+        ax2.set_ylabel("$\sum \Gamma_G(\delta t)$")
+
+        for i in range(auto_to_plot.shape[1]):
+            color = next(ax1._get_lines.prop_cycler)["color"]
+            ax1.plot(auto_to_plot[:cut, i], linestyle=":", color=color)
+            ax2.plot(
+                integrated_to_plot[:cut, i],
+                linestyle="-",
+                color=color,
+                label=f"$x =$ ({i},{i})",
+            )
+            ax1.axvline(lines_to_plot[i], linestyle="--", color=color)
+
+        ax1.set_xlim(left=0)
+        ax1.set_ylim(top=1)
+        ax2.set_ylim(bottom=0.5)
+
+        ax2.legend()
+        fig.tight_layout()
+        return fig
+
+    @property
+    def plot_topological_charge_autocorrelation(self):
+        auto_to_plot = self._auto_topological_charge
+        integrated_to_plot = self._iauto_topological_charge
+        line = self._optimal_window_topological_charge
+
+        fig, ax1 = plt.subplots(1)
+        ax2 = ax1.twinx()
+        ax1.set_title("$Q$ autocorrelation")
+        ax1.set_xlabel("$\delta t$")
+        ax1.set_ylabel("$\Gamma_Q(\delta t)$")
+        ax2.set_ylabel("$\sum \Gamma_Q(\delta t)$")
+
+        ax1.plot(auto_to_plot[: line * 2], linestyle=":")
+        ax2.plot(integrated_to_plot[: line * 2], linestyle="-")
+        ax1.axvline(line, linestyle="--")
+        ax2.text(1, 0.6, fr"$\tau_Q = ${integrated_to_plot[line]}")
+
+        ax1.set_xlim(left=0)
+        ax1.set_ylim(top=1)
+        ax2.set_ylim(bottom=0.5)
+
         fig.tight_layout()
         return fig

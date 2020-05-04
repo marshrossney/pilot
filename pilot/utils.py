@@ -1,8 +1,13 @@
 import numpy as np
 from functools import wraps
 
+
 # TODO: set this somewhere sensible
 BOOTSTRAP_SAMPLE_SIZE = 100
+
+
+class NotRequired(Exception):
+    pass
 
 
 def spher_to_eucl(coords):
@@ -34,6 +39,7 @@ def spher_to_eucl(coords):
     output[:, :-1] = np.cos(coords)
     output[:, 1:] *= np.cumprod(np.sin(coords), axis=1)
     return output
+
 
 
 class bootstrapped:
@@ -108,18 +114,6 @@ class unit_norm:
             setter(instance, array_in)
 
 
-class method_property:
-    def __init__(self, func):
-        self._func = func
-        self.__doc__ = func.__doc__
-
-    def __get__(self, instance, owner):
-        return self._func(instance)
-
-    def __set__(self, instance, new):
-        raise AttributeError
-
-
 class cached_property:
     def __init__(self, func):
         self._func = func
@@ -132,21 +126,23 @@ class cached_property:
         # Cache the value
         setattr(instance, self._name, attr)
 
+        # TODO: make setting illegal
+
         return attr
 
 
-class requires_true:
-    def __init__(self, *attributes):
-        self.attributes = attributes
+class requires:
 
-    def __call__(self, func):
-        @wraps(func)
-        def wrapper(instance, *args, **kwargs):
-            for attr in self.attributes:
-                if not getattr(instance, attr):
-                    raise AttributeError(
-                        f"Method {func.__name__} requires that attribute {attr} is True"
-                    )
-            return func(instance, *args, **kwargs)
+    attributes = None
+    exception = AttributeError
+    message = "oops"
 
-        return wrapper
+    def __init__(self, func):
+        self.func = func
+
+    def __call__(self, instance, *args, **kwargs):
+        for attr in self.attributes:
+            if not getattr(instance, attr):
+                raise self.exception(self.message)
+
+        return self.func(instance, *args, **kwargs)

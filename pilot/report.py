@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import pypandoc
 from pathlib import Path
 
+from pilot.fields import NotDefinedForField
+
 SAVE_DIR = "output/"
 INPUT_DIR = SAVE_DIR + "input/"
 TABLES_DIR = SAVE_DIR + "tables/"
@@ -42,24 +44,31 @@ def make_report(lattice, field, algorithm, observables):
     report_str += "\n# Tables\n"
     Path(TABLES_DIR).mkdir(parents=True, exist_ok=True)
     for table in observables.tables:
-        df = getattr(observables, "table_" + table)
-        outfile = TABLES_DIR + table + ".csv"
-        with open(outfile, "w") as f:
-            f.write(df.to_csv())
+        try:
+            df = getattr(observables, "table_" + table)
+            outfile = TABLES_DIR + table + ".csv"
+            with open(outfile, "w") as f:
+                f.write(df.to_csv())
 
-        report_str += f"\n## {table.replace('_', ' ')}\n"
-        report_str += f"\n{df.to_markdown()}\n"
+            report_str += f"\n## {table.replace('_', ' ')}\n"
+            report_str += f"\n{df.to_markdown()}\n"
+        except NotDefinedForField:
+            pass
 
     report_str += "\n# Figures\n"
     Path(FIGURES_DIR).mkdir(parents=True, exist_ok=True)
     for figure in observables.figures:
-        fig = getattr(observables, "plot_" + figure)()
-        outfile = FIGURES_DIR + figure + ".png"
-        plt.savefig(outfile)
-        plt.clf()
+        try:
+            fig = getattr(observables, "plot_" + figure)
+            outfile = FIGURES_DIR + figure + ".png"
+            plt.savefig(outfile)
+            plt.clf()
 
-        report_str += f"\n## {figure.replace('_', ' ')}\n"
-        report_str += f"\n![]({outfile})\n"
+            report_str += f"\n## {figure.replace('_', ' ')}\n"
+            report_str += f"\n![]({outfile})\n"
+            
+        except NotDefinedForField:
+            pass
 
     try:
         report_file = SAVE_DIR + "report.html"

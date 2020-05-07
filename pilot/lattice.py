@@ -1,6 +1,8 @@
 import numpy as np
 from itertools import product
 
+from pilot.utils import string_summary
+
 
 class ShiftMismatchError(Exception):
     pass
@@ -20,16 +22,14 @@ class Lattice2D:
         self.volume = self.dimensions[0] * self.dimensions[1]
 
     def __str__(self):
-        header = f"Lattice: {type(self).__name__}"
-        line = "".join(["-" for char in header])
-        out = "\n" + header + "\n" + line
-        for prop in self.summary_properties:
-            value = getattr(self, prop)
-            label = prop.replace("_", " ")
-            out += f"\n{label}: {value}"
-        return out
+        return string_summar(self, "Lattice")
 
     def get_shift(self, shifts: tuple = (1, 1), dims: tuple = (0, 1)):
+        """Unnecessarily powerful method for getting the indices in the
+        lexicographic representation for shifts in the Cartesian representation.
+        
+        TODO: document properly.
+        """
         if len(shifts) != len(dims):
             raise ShiftMismatchError(
                 "Number of shifts and number of dimensions: "

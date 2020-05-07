@@ -1,44 +1,24 @@
 import numpy as np
+import math as m
+from random import random
 from functools import wraps
 
-
-# TODO: set this somewhere sensible
-BOOTSTRAP_SAMPLE_SIZE = 100
+import params as p
 
 
 class NotDefinedForField(Exception):
     pass
 
 
-def spher_to_eucl(coords):
-    """Converts a set (N-1) angles to a set of N-component euclidean unit vectors.
-
-    # TODO
-    The order of the (N-1) angles [\phi^0, ..., \phi^{N-1}] is taken to match some
-    convention.
-
-    Parameters
-    ----------
-    coords: numpy.ndarray
-        The spherical coordinates (angles). The (N-1) angles are expected on the 1st
-        dimension. Dimension (lattice.volume, (N-1), *).
-
-    Returns
-    -------
-    out: numpy.ndarray
-        The Euclidean representation of the angles, dimension (lattice.volume, N, *).
-
-    Notes
-    -----
-    See REF
-    """
-    output_shape = list(coords.shape)
-    output_shape[1] += 1
-
-    output = np.ones(output_shape)
-    output[:, :-1] = np.cos(coords)
-    output[:, 1:] *= np.cumprod(np.sin(coords), axis=1)
-    return output
+def string_summary(obj, title):
+    header = f"{title}: {type(obj).__name__}"
+    line = "".join(["-" for char in header])
+    out = "\n" + header + "\n" + line
+    for prop in obj.summary_properties:
+        value = getattr(obj, prop)
+        label = prop.replace("_", " ")
+        out += f"\n{label}: {value}"
+    return out
 
 
 class bootstrapped:
@@ -47,38 +27,37 @@ class bootstrapped:
     """
 
     def __init__(self, func):
-        self.func = func
-        self.n_boot = BOOTSTRAP_SAMPLE_SIZE
+        self._func = func
+        self._n_boot = p.bootstrap_sample_size
         self.__doc__ = func.__doc__
 
     def __call__alt(self, instance, *args, **kwargs):
-        # This version can save memory
+        # This version prevents potentially huge memory allocations
+        # by looping over the bootstrap samples.
         # TODO: automatically select version based on array size
         data_size = self._get_data_size(args)  # ensemble size
 
         sample = []
-        for _ in range(self.n_boot):
+        for _ in range(self._n_boot):
             boot_index = np.random.randint(0, data_size, size=data_size)
             resampled_args = []
 
             for arg in args:
                 resampled_args.append(arg[..., boot_index])
 
-            func_output = self.func(instance, *resampled_args, **kwargs)
-            sample.append(func_output)
+            sample.append(self._func(instance, *resampled_args, **kwargs))
 
         return np.stack(sample, axis=-2)  # bootstrap dimension is the SECOND last
 
     def __call__(self, instance, *args, **kwargs):
         data_size = self._get_data_size(args)  # ensemble size
 
-        boot_index = np.random.randint(0, data_size, size=(self.n_boot, data_size))
+        boot_index = np.random.randint(0, data_size, size=(self._n_boot, data_size))
         resampled_args = []
         for arg in args:
             resampled_args.append(arg[..., boot_index])
 
-        func_output = self.func(instance, *resampled_args, **kwargs)
-        return func_output
+        return self._func(instance, *resampled_args, **kwargs)
 
     def _get_data_size(self, args):
         sizes = []
@@ -97,14 +76,14 @@ class unit_norm:
         pass
 
     def __init__(self, dim=1, atol=1e-6):
-        self.dim = dim
-        self.atol = atol
+        self._dim = dim
+        self._atol = atol
 
     def __call__(self, setter):
         @wraps(setter)
         def wrapper(instance, array_in):
             if not np.allclose(
-                np.linalg.norm(array_in, axis=self.dim), 1, atol=self.atol
+                np.linalg.norm(array_in, axis=self._dim), 1, atol=self._atol
             ):
                 raise self.UnitNormError(
                     f"Array contains elements with a norm along dimension {self.dim} that deviates from unity by more than {self.atol}."
@@ -114,6 +93,11 @@ class unit_norm:
 
 
 class cached_property:
+    """Descriptor which evalutes a function instance.propert() and caches the
+    result. Subsequently, instance.property points to this cached value rather
+    than the function which calculates it.
+    """
+
     def __init__(self, func):
         self._func = func
         self._name = func.__name__
@@ -122,7 +106,7 @@ class cached_property:
     def __get__(self, instance, owner):
         attr = self._func(instance)
 
-        # Cache the value
+        # Cache the value, override instance.property
         setattr(instance, self._name, attr)
 
         # TODO: make setting illegal
@@ -131,17 +115,20 @@ class cached_property:
 
 
 class requires:
+    """Base class for decorators which will check for requirements and throw
+    a custom error."""
 
     attributes = None
     exception = AttributeError
     message = "oops"
 
     def __init__(self, func):
-        self.func = func
+        self._func = func
+        self.__doc__ = func.__doc__
 
     def __call__(self, instance, *args, **kwargs):
         for attr in self.attributes:
             if not getattr(instance, attr):
                 raise self.exception(self.message)
 
-        return self.func(instance, *args, **kwargs)
+        return self._func(instance, *args, **kwargs)

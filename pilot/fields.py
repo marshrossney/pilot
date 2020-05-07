@@ -1,15 +1,16 @@
 import numpy as np
 from random import random, randint
-from math import pi, exp
+from math import pi, exp, sqrt
+import math as m
 
 import scipy.stats
 from pilot.distributions import SphericalUniformDist
 from pilot.utils import (
     NotDefinedForField,
-    spher_to_eucl,
     bootstrapped,
     unit_norm,
     requires,
+    string_summary,
 )
 
 
@@ -49,19 +50,11 @@ class Field:
         self.__dict__.update(theory_kwargs)
 
         self.shift = self.lattice.get_shift()
-        self.neighbours = self.lattice.get_neighbours()
 
         self.has_topology = False
 
     def __str__(self):
-        header = f"Field: {type(self).__name__}"
-        line = "".join(["-" for char in header])
-        out = "\n" + header + "\n" + line
-        for prop in self.summary_properties:
-            value = getattr(self, prop)
-            label = prop.replace("_", " ")
-            out += f"\n{label}: {value}"
-        return out
+        return string_summary(self, "Field")
 
     def _valid_field(self, array_in):
         # Check that 0th dimension of input data matches the number of lattice sites
@@ -146,7 +139,6 @@ class ClassicalSpinField(Field):
         return self._calc_vol_avg_two_point_correlator(self.spins)
     """
 
-    generators = {"uniform": SphericalUniformDist}
     minimum_dimensions = 2
     summary_properties = [
         "euclidean_dimension",
@@ -161,12 +153,6 @@ class ClassicalSpinField(Field):
 
         if self.euclidean_dimension == 3:
             self.has_topology = True
-
-    @classmethod
-    def from_spherical(cls, input_coords, lattice, beta=1.0):
-        """Constructs an instance of this class where the input coordinates are in the
-        spherical representation."""
-        return cls(spher_to_eucl(input_coords), lattice, beta=beta)
 
     @classmethod
     def new_like(cls, input_coords, template, input_spherical=False):
@@ -185,16 +171,12 @@ class ClassicalSpinField(Field):
             If true, input_coords are assumed to be a set of (N-1) angles, and are converted
             to Euclidean vectors. See utils.spher_to_eucl.
         """
-        if input_spherical:
-            return cls.from_spherical(
-                input_coords, template.lattice, beta=template.beta
-            )
         return cls(input_coords, template.lattice, beta=template.beta)
 
     @classmethod
     def from_random(cls, lattice, *, N, ensemble_size=1, **theory_kwargs):
         # TODO generalise
-        input_coords = cls.generators["uniform"](dim=N).rvs(
+        input_coords = SphericalUniformDist(dim=N).rvs(
             size=(lattice.volume, ensemble_size)
         )
         return cls(input_coords, lattice, **theory_kwargs)
@@ -392,74 +374,3 @@ class ClassicalSpinField(Field):
         numpy.ndarray, dimensions (*, bootstrap_sample_size, ensemble_size)"""
         return self._boot_topological_charge(self, self.spins)
 
-    def metropolis_update(self, sweeps=1, debug=False):
-        """Perform a sequence of local updates according to the Metropolis algorithm.
-        
-        Parameters
-        ----------
-        sweeps: int
-            The number of proposals generated will be (lattice.volume * sweeps).
-        debug: bool
-            If True, check that the result of local updates matches the re-computed
-            Hamiltonian. TODO: replace with some clever logging thing.
-        
-        Updates
-        -------
-        The following attributes will be updated:
-            - spins
-            - hamiltonian
-
-        Returns
-        -------
-        spins: numpy.ndarray
-            The field configuration resulting from the sequence of local updates.
-            Dimensions (lattice_volume, N)
-        n_accept: int
-            The number of proposals that were accepted.
-
-        Notes
-        -----
-        A local update comprises the rotation of a single spin by an element of O(N).
-        These rotation matrices are generated batch-wise using scipy.stats.ortho_group.
-        """
-        # TODO check that we have a single config, not an ensemble
-        n_proposals = self.lattice.volume * sweeps
-        n_accept = 0
-
-        # Make local copies of spins and Hamiltonian
-        spins = np.squeeze(self.spins.copy())
-        hamiltonian = float(self.hamiltonian)
-
-        # Generate a batch of random rotation matrices
-        rotations = scipy.stats.ortho_group.rvs(
-            dim=self.euclidean_dimension, size=n_proposals
-        )
-
-        for i in range(n_proposals):
-            rotation = rotations[i]
-            site = randint(0, self.lattice.volume - 1)
-
-            current = spins[site]
-            proposal = np.dot(rotation, current)
-
-            delta_hamil = -self.beta * np.dot(
-                proposal - current, spins[self.neighbours[site]].sum(axis=0)
-            )
-
-            if random() < exp(-delta_hamil):
-                spins[site] = proposal
-                hamiltonian += delta_hamil
-                n_accept += 1
-
-        # Update object copy of spins
-        self.spins = np.expand_dims(spins, axis=-1)
-
-        if debug:
-            # Recalculate Hamiltonian using spins and check it matches local version
-            error = float(self.hamiltonian - hamiltonian)
-            if abs(error) > 1e-6:
-                raise HamiltonianMismatchError(
-                    f"Disagreement between full calculation {hamiltonian + error} and result of local updates {hamiltonian}"
-                )
-
-        return spins, n_accept

@@ -1,57 +1,35 @@
-from pilot.fields import ClassicalSpinField
 from pilot.lattice import Lattice2D
-from pilot.sample import ClassicalSpinSampler, XYSampler, HeisenbergSampler
+from pilot.fields import ClassicalSpinField
+from pilot.sample import XYSampler, HeisenbergSampler, ClassicalSpinSampler
 from pilot.observables import Observables
 from pilot.report import make_report
 
-from argparse import ArgumentParser
-
-import pilot.params as p  # TODO: runcards..
-
-F = ClassicalSpinField
-if p.N == 2:
-    S = XYSampler
-elif p.N == 3:
-    S = HeisenbergSampler
-else:
-    S = ClassicalSpinSampler
-
-parser = ArgumentParser()
-parser.add_argument(
-    "-o",
-    "--output",
-    metavar="",
-    help="output directory, default: 'output/'",
-    default="output/",
-)
-parser.add_argument(
-    "-m",
-    "--mode",
-    metavar="",
-    help="reduced output for preliminary measurements. Options: 'full', 'therm', 'autocorr'. Default: 'full'.",
-    choices=["full", "therm", "autocorr"],
-    default="full",
-)
+from pilot.config import args
 
 
 def main():
 
-    args = parser.parse_args()
-
     # Construct lattice object
-    lattice = Lattice2D(p.lattice_length)
+    lattice = Lattice2D(args.lattice_length)
 
     # Construct field object with random initial configuration
-    field = F.from_random(lattice, N=p.N, beta=p.beta)
+    field = ClassicalSpinField.from_random(
+        lattice, N=args.euclidean_dimension, beta=args.beta
+    )
 
     # Construct MCMC algorithm object
-    sampler = S(field, algorithm=p.algorithm, delta=p.delta)
+    if args.euclidean_dimension == 2:
+        sampler = XYSampler(field, delta=args.max_step)
+    elif args.euclidean_dimension == 3:
+        sampler = HeisenbergSampler(field, delta=args.max_step)
+    else:
+        sampler = ClassicalSpinSampler(field)
 
     # Generate sample from MCMC
-    sample = sampler(p.sample_size, p.sample_interval, p.thermalisation)
+    sample = sampler(args.sample_size, args.sample_interval, args.thermalisation)
 
     # Construct ensemble object
-    ensemble = F.new_like(sample, template=field)
+    ensemble = ClassicalSpinField.new_like(sample, template=field)
 
     # Construct observables object
     observables = Observables(ensemble)

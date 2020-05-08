@@ -6,7 +6,7 @@ from pilot.lattice import Lattice2D
 from pilot.fields import ClassicalSpinField
 from pilot.distributions import spher_to_eucl
 
-L = 100  # must be 4 or greater
+L = 4  # must be 4 or greater
 TESTING_LATTICE = Lattice2D(L)
 
 
@@ -71,16 +71,15 @@ def add_minimal_hedgehog(state, loc: tuple, positive: bool = True):
     return state
 
 
-
 def test_uncharged():
+    theta = np.random.rand(L ** 2) * 0.5 * pi  # all spins sit in one hemisphere
     phi = np.random.rand(L ** 2) * 2 * pi
-    theta = np.random.rand(L ** 2) * 0.42 * pi
     state = spher_to_eucl(np.stack((theta, phi), axis=-1))
     field = ClassicalSpinField(state, TESTING_LATTICE)
     assert abs(float(field.topological_charge)) < 1e-7
 
 
-def otest_minimal_hedgehog_pos():
+def test_minimal_hedgehog_pos():
     state = np.stack((np.ones((L, L)) * pi, np.zeros((L, L))), axis=-1)
     state = add_minimal_hedgehog(
         state, (randint(0, L - 1), randint(0, L - 1)), positive=True
@@ -92,7 +91,7 @@ def otest_minimal_hedgehog_pos():
     assert abs(float(field.topological_charge) - 1) < 1e-7
 
 
-def otest_minimal_hedgehog_neg():
+def test_minimal_hedgehog_neg():
     state = np.zeros((L, L, 2))
     state = add_minimal_hedgehog(
         state, (randint(0, L - 1), randint(0, L - 1)), positive=False
@@ -102,4 +101,3 @@ def otest_minimal_hedgehog_neg():
 
     field = ClassicalSpinField(state, TESTING_LATTICE)
     assert abs(float(field.topological_charge) + 1) < 1e-7
-

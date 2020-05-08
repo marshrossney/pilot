@@ -29,7 +29,7 @@ class ClassicalSpinSampler:
 
         # Make local copies of spins and Hamiltonian
         self.spins = np.squeeze(field.spins.copy())
-        self.hamiltonian = float(field.hamiltonian)
+        self.action = float(field.action)
 
         # For the benefit of the report
         self.algorithm = "metropolis"
@@ -40,16 +40,16 @@ class ClassicalSpinSampler:
     def reset(self, new_field):
         self.field = new_field
         self.spins = np.squeeze(new_field.spins.copy())
-        self.hamiltonian = float(new_field.hamiltonian)
+        self.action = float(new_field.action)
         return
 
     def _metropolis_condition(self, site, current, proposal):
-        delta_hamil = -self.field.beta * np.dot(
+        delta_action = -self.field.beta * np.dot(
             proposal - current, self.spins[self.neighbours[site]].sum(axis=0)
         )
-        if random() < m.exp(-delta_hamil):
+        if random() < m.exp(-delta_action):
             self.spins[site] = proposal
-            self.hamiltonian += delta_hamil
+            self.action += delta_action
             return 1
         return 0
     
@@ -62,9 +62,11 @@ class ClassicalSpinSampler:
     
     def __call__(self, sample_size, sample_interval=1, thermalisation=1):
         # Thermalise
-        for t in range(self.volume * thermalisation):
-            site = randint(0, self.volume - 1)
-            _ = self.update(site)
+        pbar = tqdm(range(thermalisation), desc="thermalisation")
+        for sweep in pbar:
+            for t in range(self.volume):
+                site = randint(0, self.volume - 1)
+                _ = self.update(site)
 
         sample = np.empty(
             (self.volume, self.field.euclidean_dimension, sample_size)

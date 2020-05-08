@@ -31,7 +31,7 @@ class requires_topology(requires):
 class requires_ensemble(requires):
     attributes = ("is_ensemble",)
     exception = NotEnsembleError
-    message = "is only defined for ensembles}"
+    message = "Property is only defined for ensembles"
 
 
 class Field:
@@ -51,6 +51,7 @@ class Field:
 
         self.shift = self.lattice.get_shift()
 
+        self.has_spins = False
         self.has_topology = False
 
     def __str__(self):
@@ -90,17 +91,6 @@ class Field:
         if len(self.coords.squeeze().shape) >= self.minimum_dimensions + 1:
             return True
         return False
-
-    @property
-    def has_topology(self):
-        """Bool or indicating whether or not topological properties can be calculated.
-        May be False due to lack of implementation or because the topology is trivial."""
-        return self._has_topology
-
-    @has_topology.setter
-    def has_topology(self, has):
-        """Setter for has_topology."""
-        self._has_topology = has
 
 
 class ClassicalSpinField(Field):
@@ -151,6 +141,7 @@ class ClassicalSpinField(Field):
         self.spins = self.coords
         self.euclidean_dimension = self.spins.shape[1]
 
+        self.has_spins = True
         if self.euclidean_dimension == 3:
             self.has_topology = True
 
@@ -175,14 +166,13 @@ class ClassicalSpinField(Field):
 
     @classmethod
     def from_random(cls, lattice, *, N, ensemble_size=1, **theory_kwargs):
-        # TODO generalise
         input_coords = SphericalUniformDist(dim=N).rvs(
             size=(lattice.volume, ensemble_size)
         )
         return cls(input_coords, lattice, **theory_kwargs)
 
-    def _hamiltonian(self, spins):
-        """Calculates the Hamiltonian for a spin system or ensemble."""
+    def _action(self, spins):
+        """Calculates (beta times) the Hamiltonian for a spin system or ensemble."""
         return -self.beta * np.sum(
             spins[self.shift] * np.expand_dims(spins, axis=1),
             axis=2,  # sum over vector components
@@ -194,8 +184,9 @@ class ClassicalSpinField(Field):
 
     def _magnetisation_sq(self, spins):
         """Calculates the square of the magnetisation for a spin system or ensemble."""
-        mag = spins.mean(axis=0)  # volume average
-        return np.sum(mag ** 2, axis=0)  # sum over vector components
+        return np.sum(
+            spins.sum(axis=0) ** 2, axis=0
+        )  # sum over volume, then vector components
 
     def _vol_avg_two_point_correlator(self, spins):
         """Calculates the volume-averaged two point connected correlation function for an
@@ -215,7 +206,7 @@ class ClassicalSpinField(Field):
                 axis=0,  # average over volume
             )
         # Make connected
-        va_correlator -= self._magnetisation_sq(spins)
+        va_correlator -= self._magnetisation_sq(spins) / self.lattice.volume ** 2
 
         return va_correlator
 
@@ -249,13 +240,10 @@ class ClassicalSpinField(Field):
         by geodesics between three points on the surface. The parameters are the unit
         vectors corresponding the three points on the unit sphere.
         """
-        numerator = np.sum(
-            a * np.cross(b, c, axis=0), axis=0
-        )  # keep dim so we always output an array
-        denominator = (
-            1 + np.sum(a * b, axis=0) + np.sum(b * c, axis=0) + np.sum(c * a, axis=0)
+        return 2 * np.arctan2(  # arctan2 since output needs to be (-2pi, 2pi)
+            np.sum(a * np.cross(b, c, axis=0), axis=0),  # numerator
+            1 + np.sum(a * b, axis=0) + np.sum(b * c, axis=0) + np.sum(c * a, axis=0),  # denominator
         )
-        return 2 * np.arctan(numerator / denominator)
 
     def _topological_charge(self, spins):
         """Calculates the topological charge of a configuration or ensemble of
@@ -274,14 +262,14 @@ class ClassicalSpinField(Field):
         return charge / (4 * pi)
 
     @bootstrapped
-    def _boot_hamiltonian(self, ensemble):
-        """Calculates the Hamiltonian for a bootstrap sample of ensembles."""
-        return self._hamiltonian(ensemble)
+    def _boot_action(self, ensemble):
+        """Calculates (beta times) the Hamiltonian for a bootstrap sample of ensembles."""
+        return self._action(ensemble)
 
     @bootstrapped
     def _boot_magnetisation_sq(self, ensemble):
         """Calculates the square of the magnetisation for a bootstrap sample of ensembles."""
-        return self._hamiltonian(ensemble)
+        return self._magnetisation_sq(ensemble)
 
     @bootstrapped
     def _boot_two_point_correlator(self, ensemble):
@@ -309,10 +297,10 @@ class ClassicalSpinField(Field):
         self.coords = new  # calls coords.__set__
 
     @property
-    def hamiltonian(self):
-        """The Hamiltonian for each configuration in the ensemble.
+    def action(self):
+        """The Hamiltonian (times beta) for each configuration in the ensemble.
         numpy.ndarray, dimensions (*, ensemble_size)"""
-        return self._hamiltonian(self.spins)
+        return self._action(self.spins)
 
     @property
     def magnetisation_sq(self):
@@ -344,12 +332,12 @@ class ClassicalSpinField(Field):
 
     @property
     @requires_ensemble
-    def boot_hamiltonian(self):
-        """The Hamiltonian for a bootstrap sample of ensembles.
+    def boot_action(self):
+        """The Hamiltonian (times beta) for a bootstrap sample of ensembles.
         numpy.ndarray, dimensions(*, bootstrap_sample_size, ensemble_size)"""
         # NOTE: Not sure why the instance isn't automatically passed to the
         # __call__ method of @bootstrapped!!!
-        return self._boot_hamiltonian(self, self.spins)
+        return self._boot_action(self, self.spins)
 
     @property
     @requires_ensemble
@@ -373,4 +361,3 @@ class ClassicalSpinField(Field):
         """Topological charge of a bootstrap sample of ensembles of Heisenberg spins.
         numpy.ndarray, dimensions (*, bootstrap_sample_size, ensemble_size)"""
         return self._boot_topological_charge(self, self.spins)
-

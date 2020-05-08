@@ -3,7 +3,10 @@ import math as m
 from random import random
 from functools import wraps
 
-import params as p
+# TODO: this should be specified in the config file, but I don't want to import from config
+# here since it reduces flexibility; cannot then run any module as a script which imports
+# utils without specifying a config file.
+BOOTSTRAP_SAMPLE_SIZE = 100
 
 
 class NotDefinedForField(Exception):
@@ -28,10 +31,10 @@ class bootstrapped:
 
     def __init__(self, func):
         self._func = func
-        self._n_boot = p.bootstrap_sample_size
+        self._n_boot = BOOTSTRAP_SAMPLE_SIZE
         self.__doc__ = func.__doc__
 
-    def __call__alt(self, instance, *args, **kwargs):
+    def __call__(self, instance, *args, **kwargs):
         # This version prevents potentially huge memory allocations
         # by looping over the bootstrap samples.
         # TODO: automatically select version based on array size
@@ -49,7 +52,7 @@ class bootstrapped:
 
         return np.stack(sample, axis=-2)  # bootstrap dimension is the SECOND last
 
-    def __call__(self, instance, *args, **kwargs):
+    def __call__alt(self, instance, *args, **kwargs):
         data_size = self._get_data_size(args)  # ensemble size
 
         boot_index = np.random.randint(0, data_size, size=(self._n_boot, data_size))
@@ -125,6 +128,7 @@ class requires:
     def __init__(self, func):
         self._func = func
         self.__doc__ = func.__doc__
+        self.__name__ = func.__name__
 
     def __call__(self, instance, *args, **kwargs):
         for attr in self.attributes:

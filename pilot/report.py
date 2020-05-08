@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import pypandoc
 from pathlib import Path
 
-import pilot.params as p
 from pilot.utils import NotDefinedForField
 
 # Steal basic html and css templates

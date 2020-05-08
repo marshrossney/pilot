@@ -1,0 +1,10 @@
+lattice_length: 6
+
+euclidean_dimension: 3
+beta: 1.1
+
+algorithm: metropolis
+max_step: 0.5
+
+sample_size: 1000
+sample_interval: 1

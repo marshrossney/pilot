@@ -10,6 +10,8 @@ Dependencies:
 - tqdm
 - pandoc
 - pypandoc
+- configargparser
+- pytest
 
 Install pilot:
 ```bash

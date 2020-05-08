@@ -5,10 +5,17 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.signal import correlate
-from math import ceil
+from math import ceil, pi, sin
 from itertools import product
 
-from pilot.utils import cached_property, NotDefinedForField
+from pilot.utils import cached_property, requires, NotDefinedForField
+from pilot.fields import requires_topology
+
+
+class requires_spins(requires):
+    attributes = ("has_spins",)
+    exception = NotDefinedForField
+    message = "Not a spin system"
 
 
 class observable:
@@ -64,8 +71,8 @@ class Observables:
         "zero_momentum_correlator",
         "effective_pole_mass",
         "two_point_correlator",
-        "topological_observables",
         "two_point_correlator_integrated_autocorrelation",
+        "topological_observables",
     ]
     figures = [
         "zero_momentum_correlator",
@@ -83,6 +90,9 @@ class Observables:
 
         self.volume = ensemble.lattice.volume
 
+        self.has_topology = ensemble.has_topology
+        self.has_spins = ensemble.has_spins
+
     def __str__(self):
         out = "\n"
         for table in self.tables:
@@ -97,77 +107,40 @@ class Observables:
         return out
 
     @cached_property
+    def _action(self):
+        return self.ensemble.boot_action
+
+    @cached_property
     def _two_point_correlator_series(self):
         return self.ensemble.vol_avg_two_point_correlator
-
-    @cached_property
-    def _topological_charge_series(self):
-        return self.ensemble.topological_charge
-
-    @cached_property
-    def _hamiltonian(self):
-        return self.ensemble.boot_hamiltonian
-
-    @cached_property
-    def _magnetisation_sq(self):
-        return self.ensemble.boot_magnetisation_sq
 
     @cached_property
     def _two_point_correlator(self):
         return self.ensemble.boot_two_point_correlator.squeeze(axis=-1)
 
     @cached_property
-    def _fourier_space_correlator(self):
-        # TODO
-        pass
-
-    @cached_property
     def _zero_momentum_correlator(self):
-        return self._two_point_correlator.mean(axis=0)
-
-    @cached_property
-    def _topological_charge(self):
-        return self.ensemble.boot_topological_charge
+        return np.mean(self._two_point_correlator, axis=1)
 
     @cached_property
     def _auto_two_point_correlator(self):
-        return autocorrelation(self.ensemble.vol_avg_two_point_correlator)
-
-    @cached_property
-    def _auto_topological_charge(self):
-        return autocorrelation(self.ensemble.topological_charge)
+        return autocorrelation(self._two_point_correlator_series)
 
     @cached_property
     def _iauto_two_point_correlator(self):
         return np.cumsum(self._auto_two_point_correlator, axis=-1) - 0.5
 
     @cached_property
-    def _iauto_topological_charge(self):
-        return np.cumsum(self._auto_topological_charge) - 0.5
-
-    @cached_property
     def _optimal_window_two_point_correlator(self):
         return optimal_window(self._iauto_two_point_correlator)
 
-    @cached_property
-    def _optimal_window_topological_charge(self):
-        return optimal_window(self._iauto_topological_charge)
+    @observable
+    def action_density(self):
+        return self._action.mean(axis=-1) / self.volume
 
     @observable
-    def energy_density(self):
-        return self._hamiltonian.mean(axis=-1) / self.volume
-
-    @observable
-    def magnetisation_sq(self):
-        return self._magnetisation_sq.mean(axis=-1)
-
-    @observable
-    def magnetic_susceptibility(self):
-        return self._magnetisation_sq.var(axis=-1) / self.volume
-
-    @observable
-    def heat_capacity(self):
-        return self.ensemble.beta ** 2 / self.volume * self._hamiltonian.var(axis=-1)
+    def action_variance(self):
+        return self._action.var(axis=-1) / self.volume
 
     @observable
     def two_point_correlator(self):
@@ -178,8 +151,26 @@ class Observables:
         return self._two_point_correlator[1, 0] + self._two_point_correlator[0, 1]
 
     @observable
+    def internal_energy(self):
+        return 4 - 2 * (
+            self._two_point_correlator[1, 0] + self._two_point_correlator[0, 1]
+        )
+
+    @observable
     def susceptibility(self):
         return self._two_point_correlator.sum(axis=(0, 1))
+
+    @observable
+    def correlation_length(self):
+        # NOTE: this isn't working
+        L = self.ensemble.lattice.dimensions[0]
+        kernel = np.exp(1j * 2 * pi / L * np.arange(L)).reshape(L, 1, 1, 1)
+
+        g_tilde_00 = self._two_point_correlator.sum(axis=(0, 1))
+        g_tilde_10 = (self._two_point_correlator * kernel).sum(axis=(0, 1))
+        print(g_tilde_00.mean(), g_tilde_10.mean())
+
+        return (g_tilde_00 / g_tilde_10 - 1) / (4 * sin(pi / L) ** 2)
 
     @observable
     def zero_momentum_correlator(self):
@@ -199,22 +190,9 @@ class Observables:
         )
         return epm
 
-    @observable
-    def topological_charge(self):
-        return self._topological_charge.mean(axis=-1)
-
-    @observable
-    def topological_susceptibility(self):
-        return self._topological_charge.var(axis=-1) / self.volume
-
     @property
-    def table_spin_observables(self):
-        keys = [
-            "energy_density",
-            "magnetisation_sq",
-            "magnetic_susceptibility",
-            "heat_capacity",
-        ]
+    def table_action_moments(self):
+        keys = ["action_density", "action_variance"]
         return pd.DataFrame(
             [getattr(self, key) for key in keys],
             index=[key.replace("_", " ") for key in keys],
@@ -223,7 +201,11 @@ class Observables:
 
     @property
     def table_ising_observables(self):
-        keys = ["ising_energy", "susceptibility"]
+        keys = [
+            "ising_energy",
+            "internal_energy",
+            "susceptibility",
+        ]
         return pd.DataFrame(
             [getattr(self, key) for key in keys],
             index=[key.replace("_", " ") for key in keys],
@@ -243,15 +225,6 @@ class Observables:
         value, error = self.two_point_correlator
         return pd.concat(
             [pd.DataFrame(value), pd.DataFrame(error)], keys=["value", "error"],
-        )
-
-    @property
-    def table_topological_observables(self):
-        keys = ["topological_charge", "topological_susceptibility"]
-        return pd.DataFrame(
-            [getattr(self, key) for key in keys],
-            index=[key.replace("_", " ") for key in keys],
-            columns=["value", "error"],
         )
 
     @property
@@ -294,7 +267,7 @@ class Observables:
     @property
     def plot_two_point_correlator_series(self):
         fig, ax = plt.subplots(1)
-        ax.set_title("Two point correlator series$")
+        ax.set_title("Two point correlator series")
         ax.set_xlabel("$t$")
         ax.set_ylabel("$G(x; t)$")
         for i in range(self._two_point_correlator_series.shape[0]):
@@ -304,16 +277,6 @@ class Observables:
                 label=f"$x =$ ({i}, {i})",
             )
         ax.legend()
-        fig.tight_layout()
-        return fig
-
-    @property
-    def plot_topological_charge_series(self):
-        fig, ax = plt.subplots(1)
-        ax.set_title("Topological charge series$")
-        ax.set_xlabel("$t$")
-        ax.set_ylabel("$Q(t)$")
-        ax.plot(self._topological_charge_series, linewidth=1)
         fig.tight_layout()
         return fig
 
@@ -347,6 +310,96 @@ class Observables:
         ax2.set_ylim(bottom=0.5)
 
         ax2.legend()
+        fig.tight_layout()
+        return fig
+
+    # ----------------------------------------------------------------------------- #
+    #                               Spin observables                                #
+    # ----------------------------------------------------------------------------- #
+    @cached_property
+    @requires_spins
+    def _magnetisation_sq(self):
+        return self.ensemble.boot_magnetisation_sq
+
+    @observable
+    @requires_spins
+    def energy_density(self):
+        # Equal to action_density / beta
+        return self._action.mean(axis=-1) / (self.ensemble.beta * self.volume)
+
+    @observable
+    def magnetic_susceptibility(self):
+        return self._magnetisation_sq.mean(axis=-1) / self.volume
+
+    @observable
+    @requires_spins
+    def heat_capacity(self):
+        # factor of beta already in action. Equal to action_variance
+        return self._action.var(axis=-1) / self.volume
+
+    @property
+    def table_spin_observables(self):
+        keys = [
+            "energy_density",
+            "magnetic_susceptibility",
+            "heat_capacity",
+        ]
+        return pd.DataFrame(
+            [getattr(self, key) for key in keys],
+            index=[key.replace("_", " ") for key in keys],
+            columns=["value", "error"],
+        )
+
+    # ----------------------------------------------------------------------------- #
+    #                           Topological observables                             #
+    # ----------------------------------------------------------------------------- #
+    @cached_property
+    @requires_topology
+    def _topological_charge_series(self):
+        return self.ensemble.topological_charge
+
+    @cached_property
+    @requires_topology
+    def _topological_charge(self):
+        return self.ensemble.boot_topological_charge
+
+    @cached_property
+    @requires_topology
+    def _auto_topological_charge(self):
+        return autocorrelation(self.ensemble.topological_charge)
+
+    @cached_property
+    def _iauto_topological_charge(self):
+        return np.cumsum(self._auto_topological_charge) - 0.5
+
+    @cached_property
+    def _optimal_window_topological_charge(self):
+        return optimal_window(self._iauto_topological_charge)
+
+    @observable
+    def topological_charge(self):
+        return self._topological_charge.mean(axis=-1)
+
+    @observable
+    def topological_susceptibility(self):
+        return self._topological_charge.var(axis=-1) / self.volume
+
+    @property
+    def table_topological_observables(self):
+        keys = ["topological_charge", "topological_susceptibility"]
+        return pd.DataFrame(
+            [getattr(self, key) for key in keys],
+            index=[key.replace("_", " ") for key in keys],
+            columns=["value", "error"],
+        )
+
+    @property
+    def plot_topological_charge_series(self):
+        fig, ax = plt.subplots(1)
+        ax.set_title("Topological charge series")
+        ax.set_xlabel("$t$")
+        ax.set_ylabel("$Q(t)$")
+        ax.plot(self._topological_charge_series, linewidth=1)
         fig.tight_layout()
         return fig
 

@@ -145,6 +145,9 @@ class ClassicalSpinField(Field):
         if self.euclidean_dimension == 3:
             self.has_topology = True
 
+        # Global shift in O(N) action (only important for absolute quantities)
+        self._action_shift = self.beta * len(self.lattice.dimensions) * self.lattice.volume
+
     @classmethod
     def new_like(cls, input_coords, template, input_spherical=False):
         """Returns a new instance of the class with the same lattice and theory parameters,
@@ -171,9 +174,9 @@ class ClassicalSpinField(Field):
         )
         return cls(input_coords, lattice, **theory_kwargs)
 
-    def _action(self, spins):
-        """Calculates (beta times) the Hamiltonian for a spin system or ensemble."""
-        return -self.beta * np.sum(
+    def _hamiltonian(self, spins):
+        """Calculates the Hamiltonian for a classical spin system or ensemble."""
+        return -np.sum(
             spins[self.shift] * np.expand_dims(spins, axis=1),
             axis=2,  # sum over vector components
         ).sum(
@@ -262,9 +265,9 @@ class ClassicalSpinField(Field):
         return charge / (4 * pi)
 
     @bootstrapped
-    def _boot_action(self, ensemble):
-        """Calculates (beta times) the Hamiltonian for a bootstrap sample of ensembles."""
-        return self._action(ensemble)
+    def _boot_hamiltonian(self, ensemble):
+        """Calculates the Hamiltonian for a bootstrap sample of ensembles."""
+        return self._hamiltonian(ensemble)
 
     @bootstrapped
     def _boot_magnetisation_sq(self, ensemble):
@@ -297,10 +300,16 @@ class ClassicalSpinField(Field):
         self.coords = new  # calls coords.__set__
 
     @property
-    def action(self):
-        """The Hamiltonian (times beta) for each configuration in the ensemble.
+    def hamiltonian(self):
+        """The spin Hamiltonian for each configuration in the ensemble.
         numpy.ndarray, dimensions (*, ensemble_size)"""
-        return self._action(self.spins)
+        return self._hamiltonian(self.spins)
+    
+    @property
+    def action(self):
+        """The O(N) action for each configuration in the ensemble.
+        numpy.ndarray, dimensions (*, ensemble_size)"""
+        return self.beta * self._hamiltonian(self.spins) + self._action_shift
 
     @property
     def magnetisation_sq(self):
@@ -332,12 +341,20 @@ class ClassicalSpinField(Field):
 
     @property
     @requires_ensemble
-    def boot_action(self):
-        """The Hamiltonian (times beta) for a bootstrap sample of ensembles.
+    def boot_hamiltonian(self):
+        """The spin Hamiltonian for a bootstrap sample of ensembles.
         numpy.ndarray, dimensions(*, bootstrap_sample_size, ensemble_size)"""
         # NOTE: Not sure why the instance isn't automatically passed to the
         # __call__ method of @bootstrapped!!!
-        return self._boot_action(self, self.spins)
+        return self._boot_hamiltonian(self, self.spins)
+    
+    @property
+    @requires_ensemble
+    def boot_action(self):
+        """The O(N) action for a bootstrap sample of ensembles.
+        numpy.ndarray, dimensions(*, bootstrap_sample_size, ensemble_size)"""
+        # NOTE: this is a wasteful additional calculation
+        return self.beta * self._boot_hamiltonian(self, self.spins) + self._action_shift
 
     @property
     @requires_ensemble

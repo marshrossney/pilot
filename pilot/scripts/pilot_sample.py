@@ -19,9 +19,9 @@ def main():
 
     # Construct MCMC algorithm object
     if args.euclidean_dimension == 2:
-        sampler = XYSampler(field, delta=args.max_step)
+        sampler = XYSampler(field, args.algorithm, delta=args.max_step)
     elif args.euclidean_dimension == 3:
-        sampler = HeisenbergSampler(field, delta=args.max_step)
+        sampler = HeisenbergSampler(field, args.algorithm, delta=args.max_step)
     else:
         sampler = ClassicalSpinSampler(field)
 

@@ -24,12 +24,13 @@ class ClassicalSpinSampler:
     def __init__(self, field):
 
         self.field = field
+        self.beta = field.beta
         self.volume = field.lattice.volume
         self.neighbours = field.lattice.get_neighbours()
 
-        # Make local copies of spins and Hamiltonian
+        # Make local copies of spins and action
         self.spins = np.squeeze(field.spins.copy())
-        self.action = float(field.action)
+        self.hamiltonian = float(field.hamiltonian)
 
         # For the benefit of the report
         self.algorithm = "metropolis"
@@ -40,16 +41,16 @@ class ClassicalSpinSampler:
     def reset(self, new_field):
         self.field = new_field
         self.spins = np.squeeze(new_field.spins.copy())
-        self.action = float(new_field.action)
+        self.hamiltonian = float(new_field.hamiltonian)
         return
 
     def _metropolis_condition(self, site, current, proposal):
-        delta_action = -self.field.beta * np.dot(
+        delta_hamil = -np.dot(
             proposal - current, self.spins[self.neighbours[site]].sum(axis=0)
         )
-        if random() < m.exp(-delta_action):
+        if random() < m.exp(-self.beta * delta_hamil):
             self.spins[site] = proposal
-            self.action += delta_action
+            self.hamiltonian += delta_hamil
             return 1
         return 0
     
@@ -141,11 +142,11 @@ class HeisenbergSampler(XYSampler):
         current = self.spins[site]
 
         alpha = random() * 2 * m.pi
-        cos_beta = 1 - random() * 2 * self.delta
-        sin_beta = m.sqrt(1 - cos_beta ** 2)
+        cos_gamma = 1 - random() * 2 * self.delta
+        sin_gamma = m.sqrt(1 - cos_gamma ** 2)
         proposal = np.dot(
             self._matrix_representation(current),
-            np.array([sin_beta * m.cos(alpha), sin_beta * m.sin(alpha), cos_beta,]).T,
+            np.array([sin_gamma * m.cos(alpha), sin_gamma * m.sin(alpha), cos_gamma,]).T,
         )
 
         return self._metropolis_condition(site, current, proposal)
@@ -155,15 +156,15 @@ class HeisenbergSampler(XYSampler):
 
         local_field = self.spins[self.neighbours[site]].sum(axis=0)
         local_field_magnitude = np.linalg.norm(local_field)
-        coupling = self.field.beta * local_field_magnitude
+        coupling = self.beta * local_field_magnitude
 
         # Representation of local field unit vector as rotation matrix acting on (0, 0, 1)
         rotation = self._matrix_representation(local_field / local_field_magnitude)
 
         # Generate proposal for polar angle
         x = random()
-        cos_beta = m.log(m.exp(coupling) * (1 - x) + m.exp(-coupling) * x) / coupling
-        sin_beta = m.sqrt(1 - cos_beta ** 2)
+        cos_gamma = m.log(m.exp(coupling) * (1 - x) + m.exp(-coupling) * x) / coupling
+        sin_gamma = m.sqrt(1 - cos_gamma ** 2)
         
         alpha = (random() - 0.5) * 2 * m.pi
         sin_alpha = m.sin(alpha)
@@ -172,7 +173,7 @@ class HeisenbergSampler(XYSampler):
 
         self.spins[site] = np.dot(
             rotation,
-            np.array([sin_beta * cos_alpha, sin_beta * sin_alpha, cos_beta]),
+            np.array([sin_gamma * cos_alpha, sin_gamma * sin_alpha, cos_gamma]),
         )
         return 1
 

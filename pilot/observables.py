@@ -66,13 +66,14 @@ def optimal_window(integrated, mult=2.0, eps=1e-6):
 
 class Observables:
     tables = [
+        "two_point_scalars",
         "spin_observables",
-        "ising_observables",
+        "action_moments",
+        "topological_observables",
         "zero_momentum_correlator",
         "effective_pole_mass",
         "two_point_correlator",
         "two_point_correlator_integrated_autocorrelation",
-        "topological_observables",
     ]
     figures = [
         "zero_momentum_correlator",
@@ -107,20 +108,16 @@ class Observables:
         return out
 
     @cached_property
-    def _action(self):
-        return self.ensemble.boot_action
-
-    @cached_property
-    def _two_point_correlator_series(self):
-        return self.ensemble.vol_avg_two_point_correlator
-
-    @cached_property
     def _two_point_correlator(self):
         return self.ensemble.boot_two_point_correlator.squeeze(axis=-1)
 
     @cached_property
     def _zero_momentum_correlator(self):
         return np.mean(self._two_point_correlator, axis=1)
+
+    @cached_property
+    def _two_point_correlator_series(self):
+        return self.ensemble.vol_avg_two_point_correlator
 
     @cached_property
     def _auto_two_point_correlator(self):
@@ -135,30 +132,16 @@ class Observables:
         return optimal_window(self._iauto_two_point_correlator)
 
     @observable
-    def action_density(self):
-        return self._action.mean(axis=-1) / self.volume
-
-    @observable
-    def action_variance(self):
-        return self._action.var(axis=-1) / self.volume
-
-    @observable
     def two_point_correlator(self):
         return self._two_point_correlator
 
     @observable
-    def ising_energy(self):
-        return self._two_point_correlator[1, 0] + self._two_point_correlator[0, 1]
-
-    @observable
-    def internal_energy(self):
-        return 4 - 2 * (
-            self._two_point_correlator[1, 0] + self._two_point_correlator[0, 1]
-        )
-
-    @observable
     def susceptibility(self):
         return self._two_point_correlator.sum(axis=(0, 1))
+
+    @observable
+    def ising_energy(self):
+        return (self._two_point_correlator[1, 0] + self._two_point_correlator[0, 1]) / 2
 
     @observable
     def correlation_length(self):
@@ -191,19 +174,16 @@ class Observables:
         return epm
 
     @property
-    def table_action_moments(self):
-        keys = ["action_density", "action_variance"]
-        return pd.DataFrame(
-            [getattr(self, key) for key in keys],
-            index=[key.replace("_", " ") for key in keys],
-            columns=["value", "error"],
+    def table_two_point_correlator(self):
+        value, error = self.two_point_correlator
+        return pd.concat(
+            [pd.DataFrame(value), pd.DataFrame(error)], keys=["value", "error"],
         )
 
     @property
-    def table_ising_observables(self):
+    def table_two_point_scalars(self):
         keys = [
             "ising_energy",
-            "internal_energy",
             "susceptibility",
         ]
         return pd.DataFrame(
@@ -221,13 +201,6 @@ class Observables:
         return pd.DataFrame(self.effective_pole_mass, index=["value", "error"]).T
 
     @property
-    def table_two_point_correlator(self):
-        value, error = self.two_point_correlator
-        return pd.concat(
-            [pd.DataFrame(value), pd.DataFrame(error)], keys=["value", "error"],
-        )
-
-    @property
     def table_two_point_correlator_integrated_autocorrelation(self):
         shape_out = self._iauto_two_point_correlator.shape[:-1]
         w_opt = self._optimal_window_two_point_correlator
@@ -236,6 +209,19 @@ class Observables:
             index = tup + (w_opt[tup],)
             values_out[tup] = self._iauto_two_point_correlator[index]
         return pd.DataFrame(values_out)
+
+    @property
+    def plot_two_point_correlator(self):
+        # NOTE: Annoyingly seems to sort things in alphabetical order
+        iterator = self.table_two_point_correlator.groupby(level=0)
+        fig, axes = plt.subplots(1, 2, sharex=True, sharey=True)
+        for ax, (key, df) in zip(reversed(axes), iterator):
+            img = ax.imshow(df)
+            plt.colorbar(img, ax=ax, fraction=0.046, pad=0.04)
+            ax.xaxis.tick_top()
+            ax.set_title(key)
+        fig.tight_layout()
+        return fig
 
     @property
     def plot_zero_momentum_correlator(self):
@@ -250,19 +236,6 @@ class Observables:
         return df["value"].plot(
             x=df.index.values, yerr=df["error"], title="effective pole mass"
         )
-
-    @property
-    def plot_two_point_correlator(self):
-        # NOTE: Annoyingly seems to sort things in alphabetical order
-        iterator = self.table_two_point_correlator.groupby(level=0)
-        fig, axes = plt.subplots(1, 2, sharex=True, sharey=True)
-        for ax, (key, df) in zip(reversed(axes), iterator):
-            img = ax.imshow(df)
-            plt.colorbar(img, ax=ax, fraction=0.046, pad=0.04)
-            ax.xaxis.tick_top()
-            ax.set_title(key)
-        fig.tight_layout()
-        return fig
 
     @property
     def plot_two_point_correlator_series(self):
@@ -318,14 +291,18 @@ class Observables:
     # ----------------------------------------------------------------------------- #
     @cached_property
     @requires_spins
+    def _hamiltonian(self):
+        return self.ensemble.boot_hamiltonian
+
+    @cached_property
+    @requires_spins
     def _magnetisation_sq(self):
         return self.ensemble.boot_magnetisation_sq
 
     @observable
     @requires_spins
     def energy_density(self):
-        # Equal to action_density / beta
-        return self._action.mean(axis=-1) / (self.ensemble.beta * self.volume)
+        return self._hamiltonian.mean(axis=-1) / self.volume
 
     @observable
     def magnetic_susceptibility(self):
@@ -334,8 +311,7 @@ class Observables:
     @observable
     @requires_spins
     def heat_capacity(self):
-        # factor of beta already in action. Equal to action_variance
-        return self._action.var(axis=-1) / self.volume
+        return self.ensemble.beta ** 2 * self._hamiltonian.var(axis=-1) / self.volume
 
     @property
     def table_spin_observables(self):
@@ -344,6 +320,31 @@ class Observables:
             "magnetic_susceptibility",
             "heat_capacity",
         ]
+        return pd.DataFrame(
+            [getattr(self, key) for key in keys],
+            index=[key.replace("_", " ") for key in keys],
+            columns=["value", "error"],
+        )
+
+    # ----------------------------------------------------------------------------- #
+    #                    Observables involving the O(N) action                      #
+    # ----------------------------------------------------------------------------- #
+    @cached_property
+    def _action(self):
+        return self.ensemble.boot_action
+
+    @observable
+    def energy_density_v2(self):
+        # Should be 2E_spin + 4
+        return 2 * self._action.mean(axis=-1) / (self.ensemble.beta * self.volume)
+
+    @observable
+    def heat_capacity_v2(self):
+        return self._action.var(axis=-1) / self.volume
+
+    @property
+    def table_action_moments(self):
+        keys = ["energy_density_v2", "heat_capacity_v2"]
         return pd.DataFrame(
             [getattr(self, key) for key in keys],
             index=[key.replace("_", " ") for key in keys],
@@ -382,7 +383,7 @@ class Observables:
 
     @observable
     def topological_susceptibility(self):
-        return self._topological_charge.var(axis=-1) / self.volume
+        return 10000 * self._topological_charge.var(axis=-1) / self.volume
 
     @property
     def table_topological_observables(self):

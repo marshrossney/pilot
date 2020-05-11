@@ -383,7 +383,7 @@ class Observables:
 
     @observable
     def topological_susceptibility(self):
-        return 10000 * self._topological_charge.var(axis=-1) / self.volume
+        return self._topological_charge.var(axis=-1) / self.volume
 
     @property
     def table_topological_observables(self):

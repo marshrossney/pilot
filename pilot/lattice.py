@@ -49,14 +49,16 @@ class Lattice2D:
         """Returns nearest neighbour indices: up/down/left/right."""
         return self.get_shift((1, -1, 1, -1), (0, 0, 1, 1))
 
-    def two_point_iterator(self, pos_only=False, diag_only=False):
+    def two_point_iterator(self, mode="full", pos_only=False):
         """Iterator for shifts."""
         if pos_only:
             indices = [range(L // 2 + 1) for L in self.dimensions]
         else:
             indices = [range(L) for L in self.dimensions]
-        if diag_only:
+        if mode == "diag":
             vectors = zip(*indices)  # truncates if dimensions not equal size
+        elif mode == "one_dim":
+            vectors = [(0, i) for i in indices[1]]
         else:
             vectors = product(*indices)
 

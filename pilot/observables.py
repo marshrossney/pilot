@@ -35,8 +35,8 @@ class observable:
 
 
 def autocorrelation(chain):
-    chain -= chain.mean(axis=-1, keepdims=True)  # expect ensemble dimension at -1
-    auto = correlate(chain, chain, mode="same")
+    chain_shifted = chain - chain.mean(axis=-1, keepdims=True)  # expect ensemble dimension at -1
+    auto = correlate(chain_shifted, chain_shifted, mode="same")
     t0 = auto.shape[-1] // 2  # this is true for mode="same"
     return auto[..., t0:] / auto[..., [t0]]  # normalise and take +ve shifts
 
@@ -245,9 +245,9 @@ class Observables:
         ax.set_ylabel("$G(x; t)$")
         for i in range(self._two_point_correlator_series.shape[0]):
             ax.plot(
-                self._two_point_correlator_series[i, :],
-                linewidth=1,
-                label=f"$x =$ ({i}, {i})",
+                self._two_point_correlator_series[i, ::10],
+                linewidth=0.5,
+                label=f"$x =$ ({0}, {i})",
             )
         ax.legend()
         fig.tight_layout()
@@ -273,8 +273,9 @@ class Observables:
             ax2.plot(
                 integrated_to_plot[i, :cut],
                 linestyle="-",
+                linewidth=0.5,
                 color=color,
-                label=f"$x =$ ({i},{i})",
+                label=f"$x =$ ({0},{i})",
             )
             ax1.axvline(lines_to_plot[i], linestyle="--", color=color)
 

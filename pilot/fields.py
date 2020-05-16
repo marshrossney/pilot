@@ -7,11 +7,11 @@ import scipy.stats
 from pilot.distributions import SphericalUniformDist
 from pilot.utils import (
     NotDefinedForField,
-    bootstrapped,
     unit_norm,
     requires,
     string_summary,
 )
+from pilot.multiprocessing import bootstrapped
 
 
 class HamiltonianMismatchError(Exception):
@@ -196,20 +196,18 @@ class ClassicalSpinField(Field):
         ensemble of field configurations."""
         _, _, *extra_dims = spins.shape
         # Take positive diagonal shifts only to save time
-        n_pos_diag = min(self.lattice.dimensions) // 2 + 1
-        va_correlator = np.empty((n_pos_diag, *extra_dims))
+        n_pos = min(self.lattice.dimensions) // 2 + 1
+        va_correlator = np.empty((n_pos, *extra_dims))
 
         # Disconnected part
-        for vector, shift in self.lattice.two_point_iterator(
-            pos_only=True, diag_only=True
+        for shift_cart, shift_lexi in self.lattice.two_point_iterator(
+            mode="one_dim", pos_only=True
         ):
-            va_correlator[vector[0]] = np.sum(
-                spins[shift] * spins, axis=1,  # sum over vector components
+            va_correlator[shift_cart[1]] = np.sum(
+                spins[shift_lexi] * spins, axis=1,  # sum over vector components
             ).mean(
                 axis=0,  # average over volume
             )
-        # Make connected
-        va_correlator -= self._magnetisation_sq(spins) / self.lattice.volume ** 2
 
         return va_correlator
 
@@ -218,20 +216,13 @@ class ClassicalSpinField(Field):
         field configurations."""
         _, _, *extra_dims, _ = ensemble.shape
         correlator = np.empty((*self.lattice.dimensions, *extra_dims, 1))
-        for vector, shift in self.lattice.two_point_iterator():
-            correlator[vector] = (
+        for shift_cart, shift_lexi in self.lattice.two_point_iterator():
+            correlator[shift_cart] = (
                 np.sum(
-                    ensemble[shift] * ensemble, axis=1,  # sum over vector components
+                    ensemble[shift_lexi] * ensemble, axis=1,  # sum over vector components
                 ).mean(
                     axis=-1,  # average over ensemble
                     keepdims=True,  # keep ensemble dimension
-                )
-                - np.sum(
-                    ensemble[shift].mean(
-                        axis=-1, keepdims=True,  # average over ensemble
-                    )
-                    * ensemble.mean(axis=-1, keepdims=True),  # average over ensemble
-                    axis=1,  # sum over vector components
                 )
             ).mean(
                 axis=0  # average over volume

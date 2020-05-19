@@ -81,3 +81,21 @@ class requires:
                 raise self.exception(self.message)
 
         return self._func(instance, *args, **kwargs)
+
+# TODO: this should be specified in the config file, but I don't want to import from config
+# here since it reduces flexibility; cannot then run any module as a script which imports
+# utils without specifying a config file.
+BOOTSTRAP_SAMPLE_SIZE = 100
+
+def bootstrap_sample(data):
+    state = np.random.RandomState()
+    *dims, data_size = data.shape
+
+    sample = []
+    for j in range(BOOTSTRAP_SAMPLE_SIZE):
+        boot_index = state.randint(0, data_size, size=data_size)
+        sample.append(data[..., boot_index])
+
+    return np.stack(sample, axis=-2)
+
+

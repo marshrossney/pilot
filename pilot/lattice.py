@@ -63,4 +63,15 @@ class Lattice2D:
             vectors = product(*indices)
 
         for vector in vectors:
-            yield vector, self.get_shift((tuple(vector),), ((0, 1),)).flatten()
+            yield self.get_shift((tuple(vector),), ((0, 1),)).flatten()
+
+    def two_point_iterator_1d(self, dim=-1, pos_only=False):
+        high = self.dimensions[dim]
+        if pos_only:
+            high = high // 2 + 1
+        vectors = [[0,] * len(self.dimensions) for _ in range(high)]
+        for i, vector in enumerate(vectors):
+            vector[dim] = i
+            yield i, self.get_shift((tuple(vector),), ((0, 1),)).flatten()
+
+

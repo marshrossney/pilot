@@ -1,13 +1,49 @@
 import numpy as np
 import multiprocessing as mp
 from functools import partial
+from itertools import islice
 from math import ceil
 
-# TODO: this should be specified in the config file, but I don't want to import from config
-# here since it reduces flexibility; cannot then run any module as a script which imports
-# utils without specifying a config file.
-BOOTSTRAP_SAMPLE_SIZE = 1
+USE_MULTIPROCESSING = True
 
+class Multiprocessing:
+    def __init__(self, func, generator):
+        self.func = func
+        self.generator = generator
+
+        self.n_iters = sum(1 for _ in generator())
+        self.n_cores = mp.cpu_count()
+        if not USE_MULTIPROCESSING:
+            self.n_cores = 1
+        self.max_chunk = ceil(self.n_iters / self.n_cores)
+
+    def target(self, k, output_dict):
+        # NOTE: separate generator object for each proc
+        generator_k = islice(self.generator(), k * self.max_chunk, min((k + 1) * self.max_chunk, self.n_iters))
+        i_glob = k * self.max_chunk
+        for i, args in enumerate(generator_k):
+            output_dict[i_glob + i] = self.func(args)
+        return
+
+    def __call__(self):
+        manager = mp.Manager()
+        output_dict = manager.dict()
+
+        procs = []
+        for k in range(self.n_cores):
+            p = mp.Process(target=self.target, args=(k, output_dict,),)
+            procs.append(p)
+            p.start()
+
+        # Kill the zombies
+        for p in procs:
+            p.join()
+
+        return output_dict
+
+
+
+BOOTSTRAP_SAMPLE_SIZE = 1
 
 class bootstrapped:
     """
@@ -18,7 +54,7 @@ class bootstrapped:
         self._func = func
         self.__doc__ = func.__doc__
 
-        self._n_cores = 1#mp.cpu_count()
+        self._n_cores = 1  # mp.cpu_count()
         self._chunk_size = ceil(BOOTSTRAP_SAMPLE_SIZE / self._n_cores)
 
     def _get_data_size(self, args):

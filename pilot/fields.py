@@ -10,8 +10,10 @@ from pilot.utils import (
     unit_norm,
     requires,
     string_summary,
+    bootstrap_sample,
+    cached_property,
 )
-from pilot.multiprocessing import bootstrapped
+from pilot.multiprocessing import Multiprocessing
 
 
 class HamiltonianMismatchError(Exception):
@@ -146,7 +148,9 @@ class ClassicalSpinField(Field):
             self.has_topology = True
 
         # Global shift in O(N) action (only important for absolute quantities)
-        self._action_shift = self.beta * len(self.lattice.dimensions) * self.lattice.volume
+        self._action_shift = (
+            self.beta * len(self.lattice.dimensions) * self.lattice.volume
+        )
 
     @classmethod
     def new_like(cls, input_coords, template, input_spherical=False):
@@ -174,109 +178,6 @@ class ClassicalSpinField(Field):
         )
         return cls(input_coords, lattice, **theory_kwargs)
 
-    def _hamiltonian(self, spins):
-        """Calculates the Hamiltonian for a classical spin system or ensemble."""
-        return -np.sum(
-            spins[self.shift] * np.expand_dims(spins, axis=1),
-            axis=2,  # sum over vector components
-        ).sum(
-            axis=0,  # sum over dimensions
-        ).sum(
-            axis=0,  # sum over volume
-        )
-
-    def _magnetisation_sq(self, spins):
-        """Calculates the square of the magnetisation for a spin system or ensemble."""
-        return np.sum(
-            spins.sum(axis=0) ** 2, axis=0
-        )  # sum over volume, then vector components
-
-    def _vol_avg_two_point_correlator(self, spins):
-        """Calculates the volume-averaged two point connected correlation function for an
-        ensemble of field configurations."""
-        _, _, *extra_dims = spins.shape
-        # Take positive diagonal shifts only to save time
-        n_pos = min(self.lattice.dimensions) // 2 + 1
-        va_correlator = np.empty((n_pos, *extra_dims))
-
-        # Disconnected part
-        for shift_cart, shift_lexi in self.lattice.two_point_iterator(
-            mode="one_dim", pos_only=True
-        ):
-            va_correlator[shift_cart[1]] = np.sum(
-                spins[shift_lexi] * spins, axis=1,  # sum over vector components
-            ).mean(
-                axis=0,  # average over volume
-            )
-
-        return va_correlator
-
-    def _two_point_correlator(self, ensemble):
-        """Calculates the two point connected correlation function for an ensemble of
-        field configurations."""
-        _, _, *extra_dims, _ = ensemble.shape
-        correlator = np.empty((*self.lattice.dimensions, *extra_dims, 1))
-        for shift_cart, shift_lexi in self.lattice.two_point_iterator():
-            correlator[shift_cart] = (
-                np.sum(
-                    ensemble[shift_lexi] * ensemble, axis=1,  # sum over vector components
-                ).mean(
-                    axis=-1,  # average over ensemble
-                    keepdims=True,  # keep ensemble dimension
-                )
-            ).mean(
-                axis=0  # average over volume
-            )
-        return correlator
-
-    def _spherical_triangle_area(self, a, b, c):
-        """Helper function which calculates the surface area of a unit sphere enclosed
-        by geodesics between three points on the surface. The parameters are the unit
-        vectors corresponding the three points on the unit sphere.
-        """
-        return 2 * np.arctan2(  # arctan2 since output needs to be (-2pi, 2pi)
-            np.sum(a * np.cross(b, c, axis=0), axis=0),  # numerator
-            1 + np.sum(a * b, axis=0) + np.sum(b * c, axis=0) + np.sum(c * a, axis=0),  # denominator
-        )
-
-    def _topological_charge(self, spins):
-        """Calculates the topological charge of a configuration or ensemble of
-        Heisenberg spins."""
-        _, _, *extra_dims = spins.shape
-        charge = np.zeros(extra_dims)
-
-        for x0 in range(self.lattice.volume):
-            # Four points on the lattice forming a square
-            x1, x3 = self.shift[x0]
-            x2 = self.shift[x1, 1]
-
-            charge += self._spherical_triangle_area(*list(spins[[x0, x1, x2]]))
-            charge += self._spherical_triangle_area(*list(spins[[x0, x2, x3]]))
-
-        return charge / (4 * pi)
-
-    @bootstrapped
-    def _boot_hamiltonian(self, ensemble):
-        """Calculates the Hamiltonian for a bootstrap sample of ensembles."""
-        return self._hamiltonian(ensemble)
-
-    @bootstrapped
-    def _boot_magnetisation_sq(self, ensemble):
-        """Calculates the square of the magnetisation for a bootstrap sample of ensembles."""
-        return self._magnetisation_sq(ensemble)
-
-    @bootstrapped
-    def _boot_two_point_correlator(self, ensemble):
-        """Calculates the two point connected correlation function for a bootstrap sample
-        of ensembles."""
-        return self._two_point_correlator(ensemble)
-
-    @bootstrapped
-    def _boot_topological_charge(self, spins):
-        """Calculates the topological charge of a bootstrap sample of ensembles of
-        of Heisenberg spins."""
-        return self._topological_charge(spins)
-
     @property
     def spins(self):
         """The configuration or ensemble of N-dimensional spin vectors (alias of coords).
@@ -294,25 +195,93 @@ class ClassicalSpinField(Field):
     def hamiltonian(self):
         """The spin Hamiltonian for each configuration in the ensemble.
         numpy.ndarray, dimensions (*, ensemble_size)"""
-        return self._hamiltonian(self.spins)
-    
+        return (
+            -np.sum(
+                self.spins[self.shift] * np.expand_dims(self.spins, axis=1),
+                axis=2,  # sum over vector components
+            )
+            .sum(axis=0,)  # sum over dimensions
+            .sum(axis=0,)  # sum over volume
+        )
+
     @property
     def action(self):
         """The O(N) action for each configuration in the ensemble.
         numpy.ndarray, dimensions (*, ensemble_size)"""
-        return self.beta * self._hamiltonian(self.spins) + self._action_shift
+        return self.beta * self.hamiltonian + self._action_shift
 
     @property
     def magnetisation_sq(self):
         """The squared magnetisation for each configuration in the ensemble.
         numpy.ndarray, dimensions (*, ensemble_size)"""
-        return self._magnetisation_sq(self.spins)
+        return np.sum(
+            self.spins.sum(axis=0) ** 2, axis=0
+        )  # sum over volume, then vector components
+
+    def _vol_avg_two_point_correlator(self, shift):
+        """Helper function which calculates the volume-averaged two point correlation
+        function for a single shift (given in Lexicographical form as an argument).
+        """
+        return np.sum(
+            self.spins[shift] * self.spins, axis=1,  # sum over vector components
+        ).mean(
+            axis=0  # average over volume
+        )
 
     @property
     def vol_avg_two_point_correlator(self):
-        """The volume-averaged two point connected correlation function.
-        numpy.ndarray, dimensions (*lattice_dimensions, *, ensemble_size)"""
-        return self._vol_avg_two_point_correlator(self.spins)
+        """The volume-averaged two point correlation function for positive shifts along
+        a single axis, of which there are n_shifts = lattice.dimensions[-1]/2 + 1.
+        numpy.ndarray, dimensions (n_shifts, *, ensemble_size)"""
+        _, _, *extra_dims = self.spins.shape
+        va_correlator = np.empty((self.lattice.dimensions[-1] // 2 + 1, *extra_dims))
+        for i, shift in self.lattice.two_point_iterator_1d(dim=-1, pos_only=True):
+            va_correlator[i] = self._vol_avg_two_point_correlator(shift)
+        return va_correlator[1:]  # discard (0, 0) shift
+
+    def _two_point_correlator(self, shift):
+        return self._vol_avg_two_point_correlator(shift).mean(axis=-1)
+
+    @property
+    @requires_ensemble
+    def two_point_correlator(self):
+        """Two point correlation function.
+        numpy.ndarray, dimensions (*lattice_dimensions, *, 1)"""
+        mp_correlator = Multiprocessing(
+            func=self._two_point_correlator, iterator=self.lattice.two_point_iterator()
+        )
+        flat_dict = mp_correlator()
+        extra_dims = flat_dict[0].shape
+
+        flat_array = np.array([flat_dict[i] for i in range(self.lattice.volume)])
+        return np.squeeze(
+            flat_array.reshape((*self.lattice.dimensions, *extra_dims)), axis=-1
+        )
+
+    def _spherical_triangle_area(self, a, b, c):
+        """Helper function which calculates the surface area of a unit sphere enclosed
+        by geodesics between three points on the surface. The parameters are the unit
+        vectors corresponding the three points on the unit sphere.
+        """
+        return 2 * np.arctan2(  # arctan2 since output needs to be (-2pi, 2pi)
+            np.sum(a * np.cross(b, c, axis=0), axis=0),  # numerator
+            1
+            + np.sum(a * b, axis=0)
+            + np.sum(b * c, axis=0)
+            + np.sum(c * a, axis=0),  # denominator
+        )
+
+    def _topological_charge_density(self, x0):
+        """Helper function which calculates the topological charge density at a given
+        lattice site for a configuration or ensemble of Heisenberg spins.
+        """
+        # Four points on the lattice forming a square
+        x1, x3 = self.shift[x0]
+        x2 = self.shift[x1, 1]
+        return (
+            self._spherical_triangle_area(*list(self.spins[[x0, x1, x2]]))
+            + self._spherical_triangle_area(*list(self.spins[[x0, x2, x3]]))
+        ) / (4 * pi)
 
     @property
     @requires_topology
@@ -320,52 +289,32 @@ class ClassicalSpinField(Field):
         """Topological charge of a configuration or ensemble of Heisenberg spins,
         according to the geometrical definition given in REF
         numpy.ndarray, dimensions (*, ensemble_size)"""
-        return self._topological_charge(self.spins)
+        _, _, *extra_dims = self.spins.shape
+        charge = np.zeros(extra_dims)
+        generator = lambda: range(self.lattice.volume)
 
-    @property
-    @requires_ensemble
-    def two_point_correlator(self):
-        """Two point connected correlation function, where the ensemble average
-        is taken before the volume average.
-        numpy.ndarray, dimensions (*lattice_dimensions, *, 1)"""
-        return self._two_point_correlator(self.spins)
+        mp_top_charge = Multiprocessing(
+            func=self._topological_charge_density, generator=generator
+        )
+        charge = np.array([q for q in mp_top_charge().values()]).sum(axis=0)
+        return charge
 
-    @property
-    @requires_ensemble
-    def boot_hamiltonian(self):
-        """The spin Hamiltonian for a bootstrap sample of ensembles.
-        numpy.ndarray, dimensions(*, bootstrap_sample_size, ensemble_size)"""
-        # NOTE: Not sure why the instance isn't automatically passed to the
-        # __call__ method of @bootstrapped!!!
-        return self._boot_hamiltonian(self, self.spins)
-    
-    @property
-    @requires_ensemble
-    def boot_action(self):
-        """The O(N) action for a bootstrap sample of ensembles.
-        numpy.ndarray, dimensions(*, bootstrap_sample_size, ensemble_size)"""
-        # NOTE: this is a wasteful additional calculation
-        return self.beta * self._boot_hamiltonian(self, self.spins) + self._action_shift
-
-    @property
-    @requires_ensemble
-    def boot_magnetisation_sq(self):
-        """The squared magnetisation for a bootstrap sample of ensembles.
-        numpy.ndarray, dimensions(*, bootstrap_sample_size, ensemble_size)"""
-        return self._boot_magnetisation_sq(self, self.spins)
+    def _boot_two_point_correlator(self, shift):
+        return bootstrap_sample(self._vol_avg_two_point_correlator(shift)).mean(axis=-1)
 
     @property
     @requires_ensemble
     def boot_two_point_correlator(self):
-        """Two point connected correlation function for a bootstrap sample of
-        ensembles, where the ensemble average is taken before the volume average.
+        """Two point correlation function for a bootstrap sample of ensembles
         numpy.ndarray, dimensions (*lattice_dimensions, *, bootstrap_sample_size, 1)"""
-        return self._boot_two_point_correlator(self, self.spins)
 
-    @property
-    @requires_ensemble
-    @requires_topology
-    def boot_topological_charge(self):
-        """Topological charge of a bootstrap sample of ensembles of Heisenberg spins.
-        numpy.ndarray, dimensions (*, bootstrap_sample_size, ensemble_size)"""
-        return self._boot_topological_charge(self, self.spins)
+        mp_correlator = Multiprocessing(
+            func=self._boot_two_point_correlator,
+            generator=self.lattice.two_point_iterator,
+        )
+        flat_dict = mp_correlator()
+        extra_dims = flat_dict[0].shape
+
+        flat_array = np.array([flat_dict[i] for i in range(self.lattice.volume)])
+        correlator = flat_array.reshape((*self.lattice.dimensions, *extra_dims))
+        return correlator

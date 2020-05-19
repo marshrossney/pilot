@@ -8,7 +8,7 @@ from scipy.signal import correlate
 from math import ceil, pi, sin
 from itertools import product
 
-from pilot.utils import cached_property, requires, NotDefinedForField
+from pilot.utils import cached_property, requires, NotDefinedForField, bootstrap_sample
 from pilot.fields import requires_topology
 
 
@@ -35,7 +35,9 @@ class observable:
 
 
 def autocorrelation(chain):
-    chain_shifted = chain - chain.mean(axis=-1, keepdims=True)  # expect ensemble dimension at -1
+    chain_shifted = chain - chain.mean(
+        axis=-1, keepdims=True
+    )  # expect ensemble dimension at -1
     auto = correlate(chain_shifted, chain_shifted, mode="same")
     t0 = auto.shape[-1] // 2  # this is true for mode="same"
     return auto[..., t0:] / auto[..., [t0]]  # normalise and take +ve shifts
@@ -70,6 +72,7 @@ class Observables:
         "spin_observables",
         "action_moments",
         "topological_observables",
+        "correlation_length",
         "zero_momentum_correlator",
         "effective_pole_mass",
         "two_point_correlator",
@@ -109,11 +112,14 @@ class Observables:
 
     @cached_property
     def _two_point_correlator(self):
-        return self.ensemble.boot_two_point_correlator.squeeze(axis=-1)
+        return self.ensemble.boot_two_point_correlator
 
     @cached_property
     def _zero_momentum_correlator(self):
-        return np.mean(self._two_point_correlator, axis=1)
+        return 0.5 * (
+            self._two_point_correlator.mean(axis=0)
+            + self._two_point_correlator.mean(axis=1)
+        )
 
     @cached_property
     def _two_point_correlator_series(self):
@@ -144,16 +150,53 @@ class Observables:
         return (self._two_point_correlator[1, 0] + self._two_point_correlator[0, 1]) / 2
 
     @observable
-    def correlation_length(self):
-        # NOTE: this isn't working
+    def second_moment_correlation_length(self):
+        d1, d2 = np.array(self.ensemble.lattice.dimensions)
+        x1 = np.arange(-d1 // 2 + 1, d1 // 2 + 1)
+        x2 = np.arange(-d2 // 2 + 1, d1 // 2 + 1)
+        m1, m2 = np.meshgrid(x1, x2)
+        m_sq = np.roll(m1 ** 2 + m2 ** 2, (-d1//2 + 1, -d2//2 + 1), (0, 1)).reshape(d1, d2, 1)
+        second_moment = (
+            (m_sq * self._two_point_correlator).sum(axis=(0, 1)) /
+            self._two_point_correlator.sum(axis=(0, 1))
+        )
+        return second_moment / 4
+    
+    @observable
+    def low_momentum_correlation_length_v1(self):
+        # NOTE: Only doing this for one dimension currently
         L = self.ensemble.lattice.dimensions[0]
-        kernel = np.exp(1j * 2 * pi / L * np.arange(L)).reshape(L, 1, 1, 1)
+        kernel = np.exp(1j * 2 * pi / L * np.arange(L)).reshape(L, 1, 1)
 
         g_tilde_00 = self._two_point_correlator.sum(axis=(0, 1))
         g_tilde_10 = (self._two_point_correlator * kernel).sum(axis=(0, 1))
-        print(g_tilde_00.mean(), g_tilde_10.mean())
+        print(L, g_tilde_10.mean())
 
-        return (g_tilde_00 / g_tilde_10 - 1) / (4 * sin(pi / L) ** 2)
+        return 2 * (g_tilde_00 / g_tilde_10 - 1) / (8 * sin(pi / L) ** 2)
+
+    @observable
+    def low_momentum_correlation_length_v2(self):
+        L = self.ensemble.lattice.dimensions[0]
+        kernel = np.exp(1j * 2 * pi / L * np.arange(L)).reshape(L, 1, 1)
+        
+        g_tilde_00 = self._two_point_correlator.sum(axis=(0, 1))
+        g_tilde_10 = (self._two_point_correlator * kernel).sum(axis=(0, 1))
+
+        return 2 * ((L ** 2) / (8 * pi ** 2)) * (1 - g_tilde_10 / g_tilde_00)
+    
+    @property
+    def table_correlation_length(self):
+        keys = [
+            "second_moment_correlation_length",
+            "low_momentum_correlation_length_v1",
+            "low_momentum_correlation_length_v2",
+        ]
+        return pd.DataFrame(
+            [getattr(self, key) for key in keys],
+            index=[key.replace("_", " ") for key in keys],
+            columns=["value", "error"],
+        )
+
 
     @observable
     def zero_momentum_correlator(self):
@@ -243,11 +286,11 @@ class Observables:
         ax.set_title("Two point correlator series")
         ax.set_xlabel("$t$")
         ax.set_ylabel("$G(x; t)$")
-        for i in range(self._two_point_correlator_series.shape[0]):
+        for i in range(min(10, self._two_point_correlator_series.shape[0])):
             ax.plot(
-                self._two_point_correlator_series[i, ::10],
+                self._two_point_correlator_series[i],
                 linewidth=0.5,
-                label=f"$x =$ ({0}, {i})",
+                label=f"$x =$ (0, {i+1})",
             )
         ax.legend()
         fig.tight_layout()
@@ -267,17 +310,17 @@ class Observables:
         ax1.set_ylabel("$\Gamma_G(\delta t)$")
         ax2.set_ylabel("$\sum \Gamma_G(\delta t)$")
 
-        for i in range(auto_to_plot.shape[0]):
+        for i in range(min(10, auto_to_plot.shape[0])):
             color = next(ax1._get_lines.prop_cycler)["color"]
-            ax1.plot(auto_to_plot[i, :cut], linestyle=":", color=color)
+            ax1.plot(auto_to_plot[i, :cut], linestyle=":", linewidth=0.5, color=color)
+            ax1.axvline(lines_to_plot[i], linestyle="--", linewidth=0.5, color=color)
             ax2.plot(
                 integrated_to_plot[i, :cut],
                 linestyle="-",
                 linewidth=0.5,
                 color=color,
-                label=f"$x =$ ({0},{i})",
+                label=f"$x =$ (0, {i+1})",
             )
-            ax1.axvline(lines_to_plot[i], linestyle="--", color=color)
 
         ax1.set_xlim(left=0)
         ax1.set_ylim(top=1)
@@ -293,12 +336,12 @@ class Observables:
     @cached_property
     @requires_spins
     def _hamiltonian(self):
-        return self.ensemble.boot_hamiltonian
+        return bootstrap_sample(self.ensemble.hamiltonian)
 
     @cached_property
     @requires_spins
     def _magnetisation_sq(self):
-        return self.ensemble.boot_magnetisation_sq
+        return bootstrap_sample(self.ensemble.magnetisation_sq)
 
     @observable
     @requires_spins
@@ -332,7 +375,7 @@ class Observables:
     # ----------------------------------------------------------------------------- #
     @cached_property
     def _action(self):
-        return self.ensemble.boot_action
+        return bootstrap_sample(self.ensemble.action)
 
     @observable
     def energy_density_v2(self):
@@ -363,12 +406,12 @@ class Observables:
     @cached_property
     @requires_topology
     def _topological_charge(self):
-        return self.ensemble.boot_topological_charge
+        return bootstrap_sample(self._topological_charge_series)
 
     @cached_property
     @requires_topology
     def _auto_topological_charge(self):
-        return autocorrelation(self.ensemble.topological_charge)
+        return autocorrelation(self._topological_charge_series)
 
     @cached_property
     def _iauto_topological_charge(self):

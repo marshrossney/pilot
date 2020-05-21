@@ -32,7 +32,7 @@ def main():
     ensemble = ClassicalSpinField.new_like(sample, template=field)
 
     # Construct observables object
-    observables = Observables(ensemble)
+    observables = Observables(ensemble, args.bootstrap_sample_size)
 
     # Compute observables and create report
     make_report(

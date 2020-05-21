@@ -71,10 +71,11 @@ class Observables:
         "two_point_scalars",
         "spin_observables",
         "action_moments",
-        "topological_observables",
         "correlation_length",
+        "topological_observables",
         "zero_momentum_correlator",
         "effective_pole_mass",
+        "exponential_correlation_length",
         "two_point_correlator",
         "two_point_correlator_integrated_autocorrelation",
     ]
@@ -88,9 +89,9 @@ class Observables:
         "topological_charge_autocorrelation",
     ]
 
-    def __init__(self, ensemble, bootstrap=True):
+    def __init__(self, ensemble, bootstrap_sample_size):
         self.ensemble = ensemble
-        self.bootstrap = bootstrap
+        self.bootstrap_sample_size = bootstrap_sample_size
 
         self.volume = ensemble.lattice.volume
 
@@ -112,13 +113,26 @@ class Observables:
 
     @cached_property
     def _two_point_correlator(self):
-        return self.ensemble.boot_two_point_correlator
+        return self.ensemble.boot_two_point_correlator(self.bootstrap_sample_size)
 
     @cached_property
     def _zero_momentum_correlator(self):
         return 0.5 * (
             self._two_point_correlator.mean(axis=0)
             + self._two_point_correlator.mean(axis=1)
+        )
+
+    @cached_property
+    def _effective_pole_mass(self):
+        inner_indices = np.arange(
+            1, self._zero_momentum_correlator.shape[0] - 1, dtype=int
+        )
+        return np.arccosh(
+            (
+                self._zero_momentum_correlator[inner_indices - 1]
+                + self._zero_momentum_correlator[inner_indices + 1]
+            )
+            / (2 * self._zero_momentum_correlator[inner_indices])
         )
 
     @cached_property
@@ -155,48 +169,34 @@ class Observables:
         x1 = np.arange(-d1 // 2 + 1, d1 // 2 + 1)
         x2 = np.arange(-d2 // 2 + 1, d1 // 2 + 1)
         m1, m2 = np.meshgrid(x1, x2)
-        m_sq = np.roll(m1 ** 2 + m2 ** 2, (-d1//2 + 1, -d2//2 + 1), (0, 1)).reshape(d1, d2, 1)
-        second_moment = (
-            (m_sq * self._two_point_correlator).sum(axis=(0, 1)) /
-            self._two_point_correlator.sum(axis=(0, 1))
+        m_sq = np.roll(m1 ** 2 + m2 ** 2, (-d1 // 2 + 1, -d2 // 2 + 1), (0, 1)).reshape(
+            d1, d2, 1
         )
+        second_moment = (m_sq * self._two_point_correlator).sum(
+            axis=(0, 1)
+        ) / self._two_point_correlator.sum(axis=(0, 1))
         return second_moment / 4
-    
+
     @observable
-    def low_momentum_correlation_length_v1(self):
-        # NOTE: Only doing this for one dimension currently
+    def low_momentum_correlation_length_a(self):
+        # NOTE: assume both dimensions same length
         L = self.ensemble.lattice.dimensions[0]
-        kernel = np.exp(1j * 2 * pi / L * np.arange(L)).reshape(L, 1, 1)
+        kernel = np.cos(2 * pi / L * np.arange(L)).reshape(L, 1, 1)
 
         g_tilde_00 = self._two_point_correlator.sum(axis=(0, 1))
         g_tilde_10 = (self._two_point_correlator * kernel).sum(axis=(0, 1))
-        print(L, g_tilde_10.mean())
 
-        return 2 * (g_tilde_00 / g_tilde_10 - 1) / (8 * sin(pi / L) ** 2)
+        return ((L ** 2) / (4 * pi ** 2)) * (1 - g_tilde_10 / g_tilde_00)
 
     @observable
-    def low_momentum_correlation_length_v2(self):
+    def low_momentum_correlation_length_b(self):
         L = self.ensemble.lattice.dimensions[0]
-        kernel = np.exp(1j * 2 * pi / L * np.arange(L)).reshape(L, 1, 1)
-        
+        kernel = np.cos(2 * pi / L * np.arange(L)).reshape(L, 1, 1)
+
         g_tilde_00 = self._two_point_correlator.sum(axis=(0, 1))
         g_tilde_10 = (self._two_point_correlator * kernel).sum(axis=(0, 1))
 
-        return 2 * ((L ** 2) / (8 * pi ** 2)) * (1 - g_tilde_10 / g_tilde_00)
-    
-    @property
-    def table_correlation_length(self):
-        keys = [
-            "second_moment_correlation_length",
-            "low_momentum_correlation_length_v1",
-            "low_momentum_correlation_length_v2",
-        ]
-        return pd.DataFrame(
-            [getattr(self, key) for key in keys],
-            index=[key.replace("_", " ") for key in keys],
-            columns=["value", "error"],
-        )
-
+        return (g_tilde_00 / g_tilde_10 - 1) / (4 * sin(pi / L) ** 2)
 
     @observable
     def zero_momentum_correlator(self):
@@ -204,23 +204,43 @@ class Observables:
 
     @observable
     def effective_pole_mass(self):
-        inner_indices = np.arange(
-            1, self._zero_momentum_correlator.shape[0] - 1, dtype=int
-        )
-        epm = np.arccosh(
-            (
-                self._zero_momentum_correlator[inner_indices - 1]
-                + self._zero_momentum_correlator[inner_indices + 1]
-            )
-            / (2 * self._zero_momentum_correlator[inner_indices])
-        )
-        return epm
+        return self._effective_pole_mass
+
+    @observable
+    def exponential_correlation_length(self):
+        return (1 / self._effective_pole_mass) ** 2
+
+    @property
+    def weighted_mean_exp_correlation_length(self):
+        values, errors = self.exponential_correlation_length
+        # ignore first entry
+        valid = ~np.isnan(values)
+        values = values[valid][1:]
+        errors = errors[valid][1:]
+        weights = 1 / errors
+        mean = np.sum(values * weights) / np.sum(weights)
+        error = 1 / np.sum(weights)  # standard error on the mean
+        return mean, error
 
     @property
     def table_two_point_correlator(self):
         value, error = self.two_point_correlator
         return pd.concat(
             [pd.DataFrame(value), pd.DataFrame(error)], keys=["value", "error"],
+        )
+
+    @property
+    def table_correlation_length(self):
+        keys = [
+            "second_moment_correlation_length",
+            "low_momentum_correlation_length_a",
+            "low_momentum_correlation_length_b",
+            "weighted_mean_exp_correlation_length",
+        ]
+        return pd.DataFrame(
+            [getattr(self, key) for key in keys],
+            index=[key.replace("_", " ") for key in keys],
+            columns=["value", "error"],
         )
 
     @property
@@ -242,6 +262,13 @@ class Observables:
     @property
     def table_effective_pole_mass(self):
         return pd.DataFrame(self.effective_pole_mass, index=["value", "error"]).T
+
+    @property
+    def table_exponential_correlation_length(self):
+
+        return pd.DataFrame(
+            self.exponential_correlation_length, index=["value", "error"]
+        ).T
 
     @property
     def table_two_point_correlator_integrated_autocorrelation(self):
@@ -336,12 +363,14 @@ class Observables:
     @cached_property
     @requires_spins
     def _hamiltonian(self):
-        return bootstrap_sample(self.ensemble.hamiltonian)
+        return bootstrap_sample(self.ensemble.hamiltonian, self.bootstrap_sample_size)
 
     @cached_property
     @requires_spins
     def _magnetisation_sq(self):
-        return bootstrap_sample(self.ensemble.magnetisation_sq)
+        return bootstrap_sample(
+            self.ensemble.magnetisation_sq, self.bootstrap_sample_size
+        )
 
     @observable
     @requires_spins
@@ -375,7 +404,7 @@ class Observables:
     # ----------------------------------------------------------------------------- #
     @cached_property
     def _action(self):
-        return bootstrap_sample(self.ensemble.action)
+        return bootstrap_sample(self.ensemble.action, self.bootstrap_sample_size)
 
     @observable
     def energy_density_v2(self):
@@ -406,7 +435,9 @@ class Observables:
     @cached_property
     @requires_topology
     def _topological_charge(self):
-        return bootstrap_sample(self._topological_charge_series)
+        return bootstrap_sample(
+            self._topological_charge_series, self.bootstrap_sample_size
+        )
 
     @cached_property
     @requires_topology

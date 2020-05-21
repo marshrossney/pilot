@@ -1,7 +1,6 @@
 import numpy as np
-import math as m
-from random import random
 from functools import wraps
+
 
 class NotDefinedForField(Exception):
     pass
@@ -16,7 +15,6 @@ def string_summary(obj, title):
         label = prop.replace("_", " ")
         out += f"\n{label}: {value}"
     return out
-
 
 
 class unit_norm:
@@ -66,6 +64,8 @@ class requires:
     """Base class for decorators which will check for requirements and throw
     a custom error."""
 
+    # TODO: this only works for properties! Figure out why and fix
+
     attributes = None
     exception = AttributeError
     message = "oops"
@@ -82,20 +82,14 @@ class requires:
 
         return self._func(instance, *args, **kwargs)
 
-# TODO: this should be specified in the config file, but I don't want to import from config
-# here since it reduces flexibility; cannot then run any module as a script which imports
-# utils without specifying a config file.
-BOOTSTRAP_SAMPLE_SIZE = 100
 
-def bootstrap_sample(data):
+def bootstrap_sample(data, bootstrap_sample_size):
     state = np.random.RandomState()
     *dims, data_size = data.shape
 
     sample = []
-    for j in range(BOOTSTRAP_SAMPLE_SIZE):
+    for j in range(bootstrap_sample_size):
         boot_index = state.randint(0, data_size, size=data_size)
         sample.append(data[..., boot_index])
 
     return np.stack(sample, axis=-2)
-
-

@@ -1,9 +1,6 @@
 import numpy as np
-from random import random, randint
-from math import pi, exp, sqrt
-import math as m
+from math import pi
 
-import scipy.stats
 from pilot.distributions import SphericalUniformDist
 from pilot.utils import (
     NotDefinedForField,
@@ -11,7 +8,6 @@ from pilot.utils import (
     requires,
     string_summary,
     bootstrap_sample,
-    cached_property,
 )
 from pilot.multiprocessing import Multiprocessing
 
@@ -117,10 +113,6 @@ class ClassicalSpinField(Field):
         A theory parameter specifying the coupling strength for interactions between
         spins at different lattice sites. The inverse of the temperature.
 
-    Class attributes
-    ----------------
-    generators: dict
-        TODO
 
     Notes
     -----
@@ -220,7 +212,7 @@ class ClassicalSpinField(Field):
 
     def _vol_avg_two_point_correlator(self, shift):
         """Helper function which calculates the volume-averaged two point correlation
-        function for a single shift (given in Lexicographical form as an argument).
+        function for a single shift, given in lexicographical form as an argument.
         """
         return np.sum(
             self.spins[shift] * self.spins, axis=1,  # sum over vector components
@@ -228,34 +220,49 @@ class ClassicalSpinField(Field):
             axis=0  # average over volume
         )
 
+    def _two_point_correlator(self, bootstrap=False, bootstrap_sample_size=100):
+        """Helper function which executes multiprocessing function to calculate two
+        point correlator."""
+        if bootstrap:
+            func = lambda shift: bootstrap_sample(
+                self._vol_avg_two_point_correlator(shift), bootstrap_sample_size
+            ).mean(axis=-1)
+        else:
+            func = lambda shift: self._vol_avg_two_point_correlator(shift).mean(axis=-1)
+        mp_correlator = Multiprocessing(
+            func=func, generator=self.lattice.two_point_iterator
+        )
+        correlator_dict = mp_correlator()
+        extra_dims = correlator_dict[0].shape  # bootstrap/concurrent sample dimension
+
+        correlator = np.array([correlator_dict[i] for i in range(self.lattice.volume)])
+        return correlator.reshape((*self.lattice.dimensions, *extra_dims))
+
     @property
     def vol_avg_two_point_correlator(self):
-        """The volume-averaged two point correlation function for positive shifts along
-        a single axis, of which there are n_shifts = lattice.dimensions[-1]/2 + 1.
+        """The volume-averaged two point correlation function for positive, nonzero shifts
+        along a single axis, of which there are n_shifts = lattice.dimensions[-1]/2 + 1.
         numpy.ndarray, dimensions (n_shifts, *, ensemble_size)"""
         _, _, *extra_dims = self.spins.shape
         va_correlator = np.empty((self.lattice.dimensions[-1] // 2 + 1, *extra_dims))
-        for i, shift in self.lattice.two_point_iterator_1d(dim=-1, pos_only=True):
+        for i, shift in enumerate(
+            self.lattice.two_point_iterator_1d(dim=-1, pos_only=True)
+        ):
             va_correlator[i] = self._vol_avg_two_point_correlator(shift)
         return va_correlator[1:]  # discard (0, 0) shift
-
-    def _two_point_correlator(self, shift):
-        return self._vol_avg_two_point_correlator(shift).mean(axis=-1)
 
     @property
     @requires_ensemble
     def two_point_correlator(self):
-        """Two point correlation function.
+        """Two point correlation function. Uses multiprocessing.
         numpy.ndarray, dimensions (*lattice_dimensions, *, 1)"""
-        mp_correlator = Multiprocessing(
-            func=self._two_point_correlator, iterator=self.lattice.two_point_iterator()
-        )
-        flat_dict = mp_correlator()
-        extra_dims = flat_dict[0].shape
+        return self._two_point_correlator()
 
-        flat_array = np.array([flat_dict[i] for i in range(self.lattice.volume)])
-        return np.squeeze(
-            flat_array.reshape((*self.lattice.dimensions, *extra_dims)), axis=-1
+    def boot_two_point_correlator(self, bootstrap_sample_size):
+        """Two point correlation function for a bootstrap sample of ensembles
+        numpy.ndarray, dimensions (*lattice_dimensions, *, bootstrap_sample_size, 1)"""
+        return self._two_point_correlator(
+            bootstrap=True, bootstrap_sample_size=bootstrap_sample_size
         )
 
     def _spherical_triangle_area(self, a, b, c):
@@ -287,34 +294,12 @@ class ClassicalSpinField(Field):
     @requires_topology
     def topological_charge(self):
         """Topological charge of a configuration or ensemble of Heisenberg spins,
-        according to the geometrical definition given in REF
+        according to the geometrical definition given in Berg and Luscher 1981.
+        Uses multiprocessing.
         numpy.ndarray, dimensions (*, ensemble_size)"""
-        _, _, *extra_dims = self.spins.shape
-        charge = np.zeros(extra_dims)
         generator = lambda: range(self.lattice.volume)
-
-        mp_top_charge = Multiprocessing(
+        mp_density = Multiprocessing(
             func=self._topological_charge_density, generator=generator
         )
-        charge = np.array([q for q in mp_top_charge().values()]).sum(axis=0)
+        charge = np.array([q for q in mp_density().values()]).sum(axis=0)
         return charge
-
-    def _boot_two_point_correlator(self, shift):
-        return bootstrap_sample(self._vol_avg_two_point_correlator(shift)).mean(axis=-1)
-
-    @property
-    @requires_ensemble
-    def boot_two_point_correlator(self):
-        """Two point correlation function for a bootstrap sample of ensembles
-        numpy.ndarray, dimensions (*lattice_dimensions, *, bootstrap_sample_size, 1)"""
-
-        mp_correlator = Multiprocessing(
-            func=self._boot_two_point_correlator,
-            generator=self.lattice.two_point_iterator,
-        )
-        flat_dict = mp_correlator()
-        extra_dims = flat_dict[0].shape
-
-        flat_array = np.array([flat_dict[i] for i in range(self.lattice.volume)])
-        correlator = flat_array.reshape((*self.lattice.dimensions, *extra_dims))
-        return correlator

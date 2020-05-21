@@ -72,6 +72,4 @@ class Lattice2D:
         vectors = [[0,] * len(self.dimensions) for _ in range(high)]
         for i, vector in enumerate(vectors):
             vector[dim] = i
-            yield i, self.get_shift((tuple(vector),), ((0, 1),)).flatten()
-
-
+            yield self.get_shift((tuple(vector),), ((0, 1),)).flatten()

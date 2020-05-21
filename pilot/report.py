@@ -1,6 +1,5 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-
 import pypandoc
 from pathlib import Path
 
@@ -10,6 +9,13 @@ from pilot.utils import NotDefinedForField
 HTML_TEMPLATE = r"https://raw.githubusercontent.com/tonyblundell/pandoc-bootstrap-template/master/template.html"
 CSS_TEMPLATE = r"https://raw.githubusercontent.com/tonyblundell/pandoc-bootstrap-template/master/template.css"
 
+SKIP_TABLES = [
+        "zero_momentum_correlator",
+        "effective_pole_mass",
+        "exponential_correlation_length",
+        "two_point_correlator",
+        "two_point_correlator_integrated_autocorrelation",
+]
 
 def make_summary_table(obj):
     labels, values = [], []
@@ -58,12 +64,15 @@ def make_report(lattice, field, algorithm, observables, output, mode):
     report_str += "\n# Tables\n"
     Path(tables_dir).mkdir(parents=True, exist_ok=True)
     for table in filtered(observables.tables):
-
         try:
             df = getattr(observables, "table_" + table)
             outfile = tables_dir + table + ".csv"
             with open(outfile, "w") as f:
                 f.write(df.to_csv())
+
+            # Some tables are annoyingly big for the report - plots sufficient
+            if table in SKIP_TABLES:
+                continue
 
             report_str += f"\n## {table.replace('_', ' ')}\n"
             report_str += f"\n{df.to_markdown()}\n"

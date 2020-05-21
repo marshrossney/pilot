@@ -26,11 +26,15 @@ parser.add_argument(
 #  Config file parameters  #
 # ------------------------ #
 parser.add(
-    "--lattice_length", metavar="LENGTH", type=int, required=True, help="size of single lattice dimension"
+    "--lattice_length",
+    metavar="LENGTH",
+    type=int,
+    required=True,
+    help="size of single lattice dimension",
 )
 parser.add(
     "--euclidean_dimension",
-    metavar= "N",
+    metavar="N",
     type=int,
     required=True,
     help="euclidean dimension of the fields",
@@ -43,7 +47,11 @@ parser.add(
     default="metropolis",
 )
 parser.add(
-    "--max_step", metavar="STEP", type=float, help="step size parameter for MCMC algorithm", default=1
+    "--max_step",
+    metavar="STEP",
+    type=float,
+    help="step size parameter for MCMC algorithm",
+    default=1,
 )
 
 parser.add(
@@ -73,7 +81,7 @@ parser.add(
     metavar="SIZE",
     type=int,
     help="number of ensembles in the bootstrap sample",
-    default=1000
+    default=1000,
 )
 
 args = parser.parse_args()

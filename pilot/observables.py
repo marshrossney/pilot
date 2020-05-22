@@ -213,10 +213,15 @@ class Observables:
     @property
     def weighted_mean_exp_correlation_length(self):
         values, errors = self.exponential_correlation_length
-        # ignore first entry
+        # positive, non-zero shifts only
+        T = len(values)
+        values = values[1: T // 2 + 1]
+        errors = errors[1: T // 2 + 1]
+        # discard nan's
         valid = ~np.isnan(values)
-        values = values[valid][1:]
-        errors = errors[valid][1:]
+        values = values[valid]
+        errors = errors[valid]
+
         weights = 1 / errors
         mean = np.sum(values * weights) / np.sum(weights)
         error = 1 / np.sum(weights)  # standard error on the mean

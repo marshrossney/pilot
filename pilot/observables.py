@@ -35,12 +35,11 @@ class observable:
 
 
 def autocorrelation(chain):
-    chain_shifted = chain - chain.mean(
-        axis=-1, keepdims=True
-    )  # expect ensemble dimension at -1
+    chain_shifted = chain - chain.mean()
     auto = correlate(chain_shifted, chain_shifted, mode="same")
-    t0 = auto.shape[-1] // 2  # this is true for mode="same"
-    return auto[..., t0:] / auto[..., [t0]]  # normalise and take +ve shifts
+
+    t0 = auto.size // 2  # this is true for mode="same"
+    return auto[t0:] / auto[t0]  # normalise and take +ve shifts
 
 
 def optimal_window(integrated, mult=2.0, eps=1e-6):
@@ -141,7 +140,12 @@ class Observables:
 
     @cached_property
     def _auto_two_point_correlator(self):
-        return autocorrelation(self._two_point_correlator_series)
+        return np.array(
+            [
+                autocorrelation(self._two_point_correlator_series[i])
+                for i in range(self._two_point_correlator_series.shape[0])
+            ]
+        )
 
     @cached_property
     def _iauto_two_point_correlator(self):
@@ -215,12 +219,8 @@ class Observables:
         values, errors = self.exponential_correlation_length
         # positive, non-zero shifts only
         T = len(values)
-        values = values[1: T // 2 + 1]
-        errors = errors[1: T // 2 + 1]
-        # discard nan's
-        valid = ~np.isnan(values)
-        values = values[valid]
-        errors = errors[valid]
+        values = values[: T // 2 + 1]
+        errors = errors[: T // 2 + 1]
 
         weights = 1 / errors
         mean = np.sum(values * weights) / np.sum(weights)

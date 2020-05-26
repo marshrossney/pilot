@@ -8,9 +8,6 @@ from pilot.utils import string_summary
 
 
 class ClassicalSpinSampler:
-    """
-    Class which implements the Metropolis algorithm
-    """
 
     summary_properties = [
         "sample_size",
@@ -89,6 +86,8 @@ class ClassicalSpinSampler:
         self.sample_size = sample_size
         self.sample_interval = sample_interval
         self.thermalisation = thermalisation
+
+        # TODO: add back in a check that the action/hamiltonian matches
 
         return sample
 

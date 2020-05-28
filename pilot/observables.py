@@ -302,7 +302,7 @@ class Observables:
     def plot_zero_momentum_correlator(self):
         df = self.table_zero_momentum_correlator
         return df["value"].plot(
-            x=df.index.values, yerr=df["error"], title="zero momentum correlator"
+            x=df.index.values, yerr=df["error"], logy=True, title="zero momentum correlator"
         )
 
     @property
